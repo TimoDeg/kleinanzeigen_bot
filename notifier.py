@@ -110,35 +110,58 @@ class Notifier:
         
         bot = await self._get_bot()
         sent_count = 0
+        max_retries = 3
         
         for ad in ads:
-            try:
-                message = self._format_ad_message(ad)
-                
-                await bot.send_message(
-                    chat_id=self.chat_id,
-                    text=message,
-                    parse_mode="Markdown",
-                    disable_web_page_preview=False
-                )
-                
-                sent_count += 1
-                logger.info(f"Telegram-Nachricht gesendet: {ad.get('title', 'Unbekannt')[:50]}...")
-                
-                # Rate-limiting zwischen Nachrichten
-                if sent_count < len(ads):
-                    await asyncio.sleep(self.message_delay)
+            retry_count = 0
+            success = False
+            
+            while retry_count <= max_retries and not success:
+                try:
+                    message = self._format_ad_message(ad)
                     
-            except TelegramError as e:
-                error_msg = str(e).lower()
-                # Rate Limiting: Warte länger bei 429 Fehlern
-                if "429" in error_msg or "rate limit" in error_msg or "too many requests" in error_msg:
-                    logger.warning(f"Telegram Rate Limit erreicht. Warte 60 Sekunden...")
-                    await asyncio.sleep(60)
-                else:
-                    logger.error(f"Telegram-Fehler beim Senden der Nachricht: {e}")
-            except Exception as e:
-                logger.error(f"Unerwarteter Fehler beim Senden der Telegram-Nachricht: {e}")
+                    await bot.send_message(
+                        chat_id=self.chat_id,
+                        text=message,
+                        parse_mode="Markdown",
+                        disable_web_page_preview=False
+                    )
+                    
+                    sent_count += 1
+                    success = True
+                    logger.info(f"Telegram-Nachricht gesendet: {ad.get('title', 'Unbekannt')[:50]}...")
+                    
+                except TelegramError as e:
+                    error_msg = str(e).lower()
+                    # Rate Limiting: Warte länger bei 429 Fehlern und versuche erneut
+                    if "429" in error_msg or "rate limit" in error_msg or "too many requests" in error_msg:
+                        retry_count += 1
+                        if retry_count <= max_retries:
+                            wait_time = 60 * retry_count  # Exponentielles Backoff: 60s, 120s, 180s
+                            logger.warning(f"Telegram Rate Limit erreicht. Warte {wait_time} Sekunden und versuche erneut ({retry_count}/{max_retries})...")
+                            await asyncio.sleep(wait_time)
+                            # Versuche erneut - die while-Schleife wird fortgesetzt
+                        else:
+                            logger.error(f"Telegram Rate Limit: Nach {max_retries} Versuchen aufgegeben für: {ad.get('title', 'Unbekannt')[:50]}...")
+                            break  # Gebe diese Anzeige auf und gehe zur nächsten
+                    else:
+                        # Andere Telegram-Fehler: Versuche mit normalem Retry
+                        retry_count += 1
+                        if retry_count <= max_retries:
+                            wait_time = 2 * retry_count  # Kurzes Backoff: 2s, 4s, 6s
+                            logger.warning(f"Telegram-Fehler, Wiederholung {retry_count}/{max_retries} nach {wait_time}s: {e}")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            logger.error(f"Telegram-Fehler nach {max_retries} Versuchen: {e}")
+                            break  # Gebe diese Anzeige auf und gehe zur nächsten
+                            
+                except Exception as e:
+                    logger.error(f"Unerwarteter Fehler beim Senden der Telegram-Nachricht: {e}")
+                    break  # Bei unerwarteten Fehlern nicht wiederholen
+            
+            # Rate-limiting zwischen Nachrichten (nur wenn erfolgreich)
+            if success and sent_count < len(ads):
+                await asyncio.sleep(self.message_delay)
         
         logger.info(f"Telegram-Benachrichtigungen gesendet: {sent_count}/{len(ads)}")
         return sent_count
