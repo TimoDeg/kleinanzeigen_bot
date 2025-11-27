@@ -1,2 +1,2 @@
 # kleinanzeigen_bot
-DDR5 cash
+DDR5 scraper
