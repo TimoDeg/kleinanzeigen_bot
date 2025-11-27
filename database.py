@@ -7,7 +7,7 @@ import sqlite3
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS seen_ads (
     ad_id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     price REAL,
+    link TEXT,
+    location TEXT,
+    posted_time TEXT,
     fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -54,6 +57,19 @@ class Database:
         try:
             with self._get_connection() as conn:
                 conn.executescript(DB_SCHEMA)
+                # Migration: Füge neue Spalten hinzu falls sie nicht existieren
+                try:
+                    conn.execute("ALTER TABLE seen_ads ADD COLUMN link TEXT")
+                except sqlite3.OperationalError:
+                    pass  # Spalte existiert bereits
+                try:
+                    conn.execute("ALTER TABLE seen_ads ADD COLUMN location TEXT")
+                except sqlite3.OperationalError:
+                    pass  # Spalte existiert bereits
+                try:
+                    conn.execute("ALTER TABLE seen_ads ADD COLUMN posted_time TEXT")
+                except sqlite3.OperationalError:
+                    pass  # Spalte existiert bereits
                 conn.commit()
             logger.info(f"Datenbank initialisiert: {self.db_path}")
         except sqlite3.Error as e:
@@ -82,7 +98,9 @@ class Database:
             # Bei Fehler als neu behandeln, um keine Anzeigen zu verpassen
             return True
     
-    def mark_as_seen(self, ad_id: str, title: str, price: Optional[float] = None) -> None:
+    def mark_as_seen(self, ad_id: str, title: str, price: Optional[float] = None, 
+                     link: Optional[str] = None, location: Optional[str] = None, 
+                     posted_time: Optional[str] = None) -> None:
         """
         Markiert eine Anzeige als gesehen.
         
@@ -90,17 +108,57 @@ class Database:
             ad_id: Eindeutige ID der Anzeige
             title: Titel der Anzeige
             price: Optionaler Preis der Anzeige
+            link: Optionaler Link zur Anzeige
+            location: Optionaler Ort
+            posted_time: Optionaler Zeitpunkt
         """
         try:
             with self._get_connection() as conn:
                 conn.execute(
-                    "INSERT OR REPLACE INTO seen_ads (ad_id, title, price, fetched_at) VALUES (?, ?, ?, ?)",
-                    (ad_id, title, price, datetime.now())
+                    """INSERT OR REPLACE INTO seen_ads 
+                       (ad_id, title, price, link, location, posted_time, fetched_at) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (ad_id, title, price, link, location, posted_time, datetime.now())
                 )
                 conn.commit()
             logger.debug(f"Anzeige als gesehen markiert: {ad_id}")
         except sqlite3.Error as e:
             logger.error(f"Fehler beim Markieren der Anzeige {ad_id}: {e}")
+    
+    def get_last_ads(self, limit: int = 2) -> List[Dict]:
+        """
+        Gibt die letzten N Anzeigen zurück (sortiert: ältere zuerst).
+        
+        Args:
+            limit: Anzahl der zurückzugebenden Anzeigen
+            
+        Returns:
+            Liste von Anzeigen-Dictionaries (sortiert nach ID, niedrigere ID = älter)
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    """SELECT ad_id, title, price, link, location, posted_time, fetched_at 
+                       FROM seen_ads 
+                       ORDER BY CAST(ad_id AS INTEGER) ASC 
+                       LIMIT ?""",
+                    (limit,)
+                )
+                rows = cursor.fetchall()
+                ads = []
+                for row in rows:
+                    ads.append({
+                        "id": row["ad_id"],
+                        "title": row["title"],
+                        "price": row["price"],
+                        "link": row["link"] or "",
+                        "location": row["location"] or "",
+                        "posted_time": row["posted_time"] or ""
+                    })
+                return ads
+        except sqlite3.Error as e:
+            logger.error(f"Fehler beim Abrufen der letzten Anzeigen: {e}")
+            return []
     
     def cleanup_old_entries(self, days: int = 30) -> int:
         """

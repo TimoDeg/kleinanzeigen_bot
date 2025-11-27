@@ -75,9 +75,14 @@ class KleinanzeigenScraper:
             Vollständige URL für die Suche
         """
         # eBay Kleinanzeigen URL-Struktur: /s-KATEGORIE/KEYWORD/k0cCATEGORY_ID
-        # Für PC-Zubehör & Software: c3000
+        # Für PC-Zubehör & Software: c3000, für Speicher: c225
         keyword_slug = self.keyword.lower().replace(" ", "-")
-        category_slug = "pc-zubehoer-software" if self.category == "c3000" else "anzeigen"
+        if self.category == "c3000":
+            category_slug = "pc-zubehoer-software"
+        elif self.category == "c225":
+            category_slug = "pc-zubehoer-software"  # Speicher ist Unterkategorie von PC-Zubehör
+        else:
+            category_slug = "anzeigen"
         
         # Basis-URL
         url = f"{BASE_URL}/s-{category_slug}/{keyword_slug}/k0{self.category}"
@@ -120,7 +125,13 @@ class KleinanzeigenScraper:
         Returns:
             Anzeigen-ID oder None
         """
-        # eBay Kleinanzeigen URLs haben Format: /s-anzeige/123456789
+        # eBay Kleinanzeigen URLs haben verschiedene Formate:
+        # /s-anzeige/123456789
+        # /s-anzeige/titel/123456789-225-XXXX
+        match = re.search(r'/s-anzeige/[^/]+/(\d+)', link)
+        if match:
+            return match.group(1)
+        # Fallback: Suche nach ID am Anfang
         match = re.search(r'/s-anzeige/(\d+)', link)
         if match:
             return match.group(1)
@@ -137,37 +148,84 @@ class KleinanzeigenScraper:
             Dictionary mit Anzeigendaten oder None bei Fehler
         """
         try:
-            # Titel und Link
-            title_elem = ad_element.find("h2", class_="ellipsis") or ad_element.find("a", class_="ellipsis")
-            if not title_elem:
+            # Suche nach Link - verschiedene Selektoren versuchen
+            link_elem = None
+            link = None
+            
+            # Methode 1: data-href Attribut (neue Struktur)
+            if ad_element.get("data-href"):
+                link = urljoin(BASE_URL, ad_element["data-href"])
+            # Methode 2: Direktes <a> Tag mit href
+            elif ad_element.find("a", href=re.compile(r'/s-anzeige/')):
+                link_elem = ad_element.find("a", href=re.compile(r'/s-anzeige/'))
+                if link_elem and link_elem.get("href"):
+                    link = urljoin(BASE_URL, link_elem["href"])
+            # Methode 3: Link in h2 oder anderen Elementen
+            else:
+                title_elem = (
+                    ad_element.find("h2", class_="ellipsis") or
+                    ad_element.find("h2") or
+                    ad_element.find("a", class_="ellipsis") or
+                    ad_element.find("a", href=re.compile(r'/s-anzeige/'))
+                )
+                if title_elem:
+                    link_elem = title_elem.find("a") if title_elem.name != "a" else title_elem
+                    if link_elem and link_elem.get("href"):
+                        link = urljoin(BASE_URL, link_elem["href"])
+            
+            if not link:
                 return None
             
-            title = title_elem.get_text(strip=True)
-            link_elem = title_elem.find("a") if title_elem.name != "a" else title_elem
-            if not link_elem or not link_elem.get("href"):
-                return None
-            
-            link = urljoin(BASE_URL, link_elem["href"])
             ad_id = self._extract_ad_id(link)
             if not ad_id:
                 return None
             
-            # Preis
+            # Titel extrahieren
+            title = ""
+            if link_elem:
+                title = link_elem.get_text(strip=True)
+            else:
+                # Fallback: Suche nach Titel in verschiedenen Elementen
+                title_elem = (
+                    ad_element.find("h2", class_="ellipsis") or
+                    ad_element.find("h2") or
+                    ad_element.find("a", class_="ellipsis")
+                )
+                if title_elem:
+                    title = title_elem.get_text(strip=True)
+            
+            if not title:
+                title = "Kein Titel"
+            
+            # Preis - verschiedene Selektoren
             price = None
-            price_elem = ad_element.find("p", class_="aditem-main--middle--price")
+            price_elem = (
+                ad_element.find("p", class_="aditem-main--middle--price") or
+                ad_element.find("p", class_="aditem-details--top--price") or
+                ad_element.find("div", class_="aditem-details--top--price") or
+                ad_element.find("span", class_="aditem-main--middle--price-shipping")
+            )
             if price_elem:
                 price_text = price_elem.get_text(strip=True)
                 price = self._parse_price(price_text)
             
-            # Ort
+            # Ort - verschiedene Selektoren
             location = ""
-            location_elem = ad_element.find("div", class_="aditem-main--top--left")
+            location_elem = (
+                ad_element.find("div", class_="aditem-main--top--left") or
+                ad_element.find("div", class_="aditem-details--top--left") or
+                ad_element.find("span", class_="aditem-main--top--left")
+            )
             if location_elem:
                 location = location_elem.get_text(strip=True)
             
-            # Zeitpunkt
+            # Zeitpunkt - verschiedene Selektoren
             posted_time = ""
-            time_elem = ad_element.find("div", class_="aditem-main--top--right")
+            time_elem = (
+                ad_element.find("div", class_="aditem-main--top--right") or
+                ad_element.find("div", class_="aditem-details--top--right") or
+                ad_element.find("span", class_="aditem-main--top--right")
+            )
             if time_elem:
                 posted_time = time_elem.get_text(strip=True)
             
@@ -206,21 +264,39 @@ class KleinanzeigenScraper:
                 # eBay Kleinanzeigen verwendet verschiedene Selektoren
                 ad_elements = (
                     soup.find_all("article", class_="aditem") or
+                    soup.find_all("article", id=re.compile(r'aditem-\d+')) or
                     soup.find_all("div", class_="ad-listitem") or
-                    soup.find_all("li", class_="ad-listitem")
+                    soup.find_all("li", class_="ad-listitem") or
+                    soup.find_all("li", id=re.compile(r'aditem-\d+'))
                 )
                 
                 if not ad_elements:
-                    logger.warning("Keine Anzeigen-Elemente gefunden. Möglicherweise hat sich die HTML-Struktur geändert.")
-                    # Fallback: Suche nach Links mit /s-anzeige/
-                    ad_elements = soup.find_all("a", href=re.compile(r'/s-anzeige/\d+'))
+                    logger.warning("Keine Anzeigen-Elemente gefunden. Versuche Fallback-Methode...")
+                    # Fallback: Suche nach Links mit /s-anzeige/ und hole das Parent-Element
+                    link_elements = soup.find_all("a", href=re.compile(r'/s-anzeige/\d+'))
+                    ad_elements = []
+                    for link in link_elements:
+                        # Finde das Parent-Element (article, li, div)
+                        parent = link.find_parent("article") or link.find_parent("li") or link.find_parent("div")
+                        if parent and parent not in ad_elements:
+                            ad_elements.append(parent)
                 
                 logger.info(f"Gefundene Anzeigen-Elemente: {len(ad_elements)}")
                 
+                parsed_count = 0
+                failed_count = 0
                 for elem in ad_elements:
                     ad = self._parse_ad_element(elem)
                     if ad:
                         ads.append(ad)
+                        parsed_count += 1
+                    else:
+                        failed_count += 1
+                        # Debug: Zeige warum Parsing fehlgeschlagen ist
+                        logger.debug(f"Parsing fehlgeschlagen für Element: {str(elem)[:200]}")
+                
+                if failed_count > 0:
+                    logger.warning(f"Konnte {failed_count} von {len(ad_elements)} Elementen nicht parsen")
                 
                 # Rate-limiting
                 import random

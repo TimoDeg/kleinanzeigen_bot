@@ -69,6 +69,15 @@ class KleinanzeigenBot:
         # Signal-Handler für graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        # Telegram-Befehl-Handler
+        self.telegram_handler_task = None
+        
+        # Statistiken
+        from datetime import datetime
+        self.start_time = datetime.now()
+        self.run_count = 0
+        self.last_run_time = None
     
     def _load_config(self, config_path: str) -> dict:
         """
@@ -163,10 +172,17 @@ class KleinanzeigenBot:
                 if self.price_max is not None and price > self.price_max:
                     continue
             
-            # Keyword-Ausschluss
-            title = ad.get("title", "").lower()
-            if any(keyword.lower() in title for keyword in self.exclude_keywords):
-                logger.debug(f"Anzeige ausgeschlossen (Keyword-Filter): {ad.get('title', '')[:50]}")
+            # Keyword-Ausschluss (case-insensitive)
+            title_lower = ad.get("title", "").lower()
+            excluded = False
+            for keyword in self.exclude_keywords:
+                keyword_lower = keyword.lower()
+                # Prüfe ob Keyword im Titel enthalten ist
+                if keyword_lower in title_lower:
+                    logger.info(f"Anzeige ausgeschlossen (Keyword-Filter '{keyword}'): {ad.get('title', '')[:50]}")
+                    excluded = True
+                    break
+            if excluded:
                 continue
             
             filtered.append(ad)
@@ -193,13 +209,83 @@ class KleinanzeigenBot:
             if self.database.is_new_ad(ad_id):
                 new_ads.append(ad)
                 # Sofort als gesehen markieren, um Duplikate zu vermeiden
-                self.database.mark_as_seen(ad_id, ad.get("title", ""), ad.get("price"))
+                self.database.mark_as_seen(
+                    ad_id, 
+                    ad.get("title", ""), 
+                    ad.get("price"),
+                    ad.get("link"),
+                    ad.get("location"),
+                    ad.get("posted_time")
+                )
         
         return new_ads
+    
+    def _get_status_message(self) -> str:
+        """Erstellt eine Status-Nachricht mit Bot-Informationen."""
+        from datetime import datetime, timedelta
+        
+        # Berechne Laufzeit
+        uptime = datetime.now() - self.start_time
+        uptime_str = str(uptime).split('.')[0]  # Entferne Mikrosekunden
+        
+        # Letzter Durchlauf
+        if self.last_run_time:
+            last_run_delta = datetime.now() - self.last_run_time
+            last_run_str = f"{self.last_run_time.strftime('%Y-%m-%d %H:%M:%S')} (vor {str(last_run_delta).split('.')[0]})"
+        else:
+            last_run_str = "Noch nicht gelaufen"
+        
+        # Datenbank-Statistiken
+        db_stats = self.database.get_stats(days=1)
+        
+        # Konfiguration
+        interval_min = self.interval // 60
+        
+        message = "🤖 *Bot-Status*\n\n"
+        message += f"✅ *Status:* Läuft\n\n"
+        message += f"⏱ *Laufzeit:* {uptime_str}\n"
+        message += f"🔄 *Durchläufe:* {self.run_count}\n"
+        message += f"⏰ *Letzter Durchlauf:* {last_run_str}\n"
+        message += f"⏳ *Intervall:* {interval_min} Minuten\n\n"
+        message += f"📊 *Datenbank:*\n"
+        message += f"   • Gesamt: {db_stats['total']} Anzeigen\n"
+        message += f"   • Letzte 24h: {db_stats['last_1_days']} Anzeigen\n\n"
+        message += f"🔍 *Suche:*\n"
+        message += f"   • Keyword: {self.config['search']['keyword']}\n"
+        message += f"   • Preis: {self.price_min}€ - {self.price_max}€\n"
+        
+        return message
+    
+    async def _send_welcome_message(self) -> None:
+        """Sendet eine Willkommensnachricht mit verfügbaren Befehlen."""
+        try:
+            bot = await self.notifier._get_bot()
+            chat_id = self.config["telegram"]["chat_id"]
+            
+            welcome_msg = "🤖 *Kleinanzeigen-Bot gestartet!*\n\n"
+            welcome_msg += "📋 *Verfügbare Befehle:*\n"
+            welcome_msg += "   • `/test` - Zeigt die letzten 2 Anzeigen\n"
+            welcome_msg += "   • `/status` - Zeigt Bot-Status und Statistiken\n\n"
+            welcome_msg += "Der Bot sucht automatisch alle 5 Minuten nach neuen Anzeigen."
+            
+            await bot.send_message(
+                chat_id=chat_id,
+                text=welcome_msg,
+                parse_mode="Markdown"
+            )
+            logger = logging.getLogger(__name__)
+            logger.info("Willkommensnachricht gesendet")
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Fehler beim Senden der Willkommensnachricht: {e}")
     
     async def _run_once(self) -> None:
         """Führt einen einzelnen Scraping-Zyklus aus."""
         logger = logging.getLogger(__name__)
+        
+        from datetime import datetime
+        self.last_run_time = datetime.now()
+        self.run_count += 1
         
         try:
             # Scrape Anzeigen
@@ -218,9 +304,16 @@ class KleinanzeigenBot:
             new_ads = self._get_new_ads(filtered_ads)
             logger.info(f"Neue Anzeigen: {len(new_ads)}")
             
-            # Sende Benachrichtigungen
+            # Sende Benachrichtigungen (sortiert: ältere zuerst)
             if new_ads:
-                await self.notifier.send_telegram(new_ads)
+                # Sortiere nach ID (niedrigere ID = älter)
+                def sort_key(ad):
+                    try:
+                        return int(ad.get("id", 0))
+                    except (ValueError, TypeError):
+                        return 0
+                new_ads_sorted = sorted(new_ads, key=sort_key)
+                await self.notifier.send_telegram(new_ads_sorted)
             else:
                 logger.info("Keine neuen Anzeigen")
             
@@ -236,6 +329,68 @@ class KleinanzeigenBot:
                 
         except Exception as e:
             logger.error(f"Fehler im Scraping-Zyklus: {e}", exc_info=True)
+    
+    async def _handle_telegram_commands(self) -> None:
+        """Behandelt Telegram-Befehle parallel zur Scraping-Schleife."""
+        logger = logging.getLogger(__name__)
+        
+        try:
+            bot = await self.notifier._get_bot()
+            logger.info("Telegram-Befehl-Handler gestartet")
+            
+            # Hole die letzten Update-ID
+            last_update_id = 0
+            
+            while self.running:
+                try:
+                    # Hole Updates über die Bot-API
+                    updates_response = await bot.get_updates(offset=last_update_id + 1, timeout=10)
+                    
+                    if updates_response:
+                        for update in updates_response:
+                            last_update_id = update.update_id
+                            
+                            if update.message and update.message.text:
+                                text = update.message.text.strip().lower()
+                                chat_id = str(update.message.chat.id)
+                                
+                                # Prüfe ob Nachricht von konfigurierter Chat-ID kommt
+                                if chat_id != self.config["telegram"]["chat_id"]:
+                                    continue
+                                
+                                # Reagiere auf "test" Befehl
+                                if text == "test" or text == "/test":
+                                    logger.info("Test-Befehl empfangen")
+                                    last_ads = self.database.get_last_ads(limit=2)
+                                    
+                                    if last_ads:
+                                        await self.notifier.send_telegram(last_ads)
+                                        await bot.send_message(
+                                            chat_id=chat_id,
+                                            text=f"✅ {len(last_ads)} Anzeigen gesendet"
+                                        )
+                                    else:
+                                        await bot.send_message(
+                                            chat_id=chat_id,
+                                            text="❌ Keine Anzeigen in der Datenbank gefunden"
+                                        )
+                                
+                                # Reagiere auf "status" Befehl
+                                elif text == "status" or text == "/status":
+                                    logger.info("Status-Befehl empfangen")
+                                    status_msg = self._get_status_message()
+                                    await bot.send_message(
+                                        chat_id=chat_id,
+                                        text=status_msg,
+                                        parse_mode="Markdown"
+                                    )
+                    
+                except Exception as e:
+                    logger.debug(f"Fehler beim Abrufen von Telegram-Updates: {e}")
+                    await asyncio.sleep(5)
+                    
+        except Exception as e:
+            logger.error(f"Fehler im Telegram-Befehl-Handler: {e}", exc_info=True)
     
     async def run(self, test_mode: bool = False) -> None:
         """
@@ -255,6 +410,29 @@ class KleinanzeigenBot:
         
         logger.info(f"Intervall: {self.interval} Sekunden")
         
+        # Starte Telegram-Befehl-Handler parallel
+        self.telegram_handler_task = asyncio.create_task(self._handle_telegram_commands())
+        
+        # Sende Willkommensnachricht
+        await asyncio.sleep(2)  # Kurz warten, damit Handler bereit ist
+        await self._send_welcome_message()
+        
+        # Sende die letzten 3 Anzeigen beim Start
+        logger.info("Sende die letzten 3 Anzeigen beim Start...")
+        last_ads = self.database.get_last_ads(limit=3)
+        if last_ads:
+            # Sortiere nach ID (niedrigere ID = älter)
+            def sort_key(ad):
+                try:
+                    return int(ad.get("id", 0))
+                except (ValueError, TypeError):
+                    return 0
+            last_ads_sorted = sorted(last_ads, key=sort_key)
+            await self.notifier.send_telegram(last_ads_sorted)
+            logger.info(f"Letzte {len(last_ads_sorted)} Anzeigen beim Start gesendet")
+        else:
+            logger.info("Keine Anzeigen in der Datenbank zum Senden beim Start")
+        
         while self.running:
             try:
                 await self._run_once()
@@ -270,6 +448,10 @@ class KleinanzeigenBot:
                 if not self.running:
                     break
                 await asyncio.sleep(1)
+        
+        # Stoppe Telegram-Handler
+        if self.telegram_handler_task:
+            self.telegram_handler_task.cancel()
         
         logger.info("Kleinanzeigen-Bot beendet")
 
@@ -301,6 +483,13 @@ async def main():
         "--test-telegram",
         action="store_true",
         help="Sendet eine Test-Nachricht an Telegram"
+    )
+    parser.add_argument(
+        "--send-last",
+        type=int,
+        default=2,
+        metavar="N",
+        help="Sendet die letzten N gefundenen Anzeigen per Telegram (Standard: 2)"
     )
     
     args = parser.parse_args()
