@@ -1,0 +1,19 @@
+[Unit]
+Description=eBay Kleinanzeigen Scraper Bot
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/kleinanzeigen_scraper
+Environment="PATH=/home/%i/kleinanzeigen_scraper/venv/bin"
+ExecStart=/home/%i/kleinanzeigen_scraper/venv/bin/python3 /home/%i/kleinanzeigen_scraper/main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kleinanzeigen-bot
+
+[Install]
+WantedBy=multi-user.target
+
