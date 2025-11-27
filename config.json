@@ -5,7 +5,7 @@
     "sort": "neueste",
     "price_min": 70,
     "price_max": 251,
-    "exclude_keywords": ["defekt", "kaputt", "Defekt", "Kaputt", "DEFEKT", "KAPUTT", "gaming laptop", "gaming pc", "laptop", "notebook", "pc", "computer", "rechner", "system", "komplett"]
+    "exclude_keywords": ["defekt", "kaputt", "Defekt", "Kaputt", "DEFEKT", "KAPUTT", "gaming laptop", "gaming pc", "laptop", "notebook", "pc", "computer", "rechner", "system", "komplett", "mainboard", "Mainboard", "MAINBOARD", "motherboard", "Motherboard"]
   },
   "telegram": {
     "token": "8285898160:AAEt992_pmQ0QwVE__gLRUOoBkhgc_zNs-U",

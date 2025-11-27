@@ -199,7 +199,10 @@ class KleinanzeigenScraper:
             
             # Preis - verschiedene Selektoren
             price = None
+            # Hauptselektor: p.aditem-main--middle--price-shipping--price
             price_elem = (
+                ad_element.find("p", class_="aditem-main--middle--price-shipping--price") or
+                ad_element.find("div", class_="aditem-main--middle--price-shipping") or
                 ad_element.find("p", class_="aditem-main--middle--price") or
                 ad_element.find("p", class_="aditem-details--top--price") or
                 ad_element.find("div", class_="aditem-details--top--price") or
@@ -207,6 +210,11 @@ class KleinanzeigenScraper:
             )
             if price_elem:
                 price_text = price_elem.get_text(strip=True)
+                # Falls es ein Container ist, suche nach dem Preis-Element darin
+                if price_elem.name == "div":
+                    inner_price = price_elem.find("p", class_="aditem-main--middle--price-shipping--price")
+                    if inner_price:
+                        price_text = inner_price.get_text(strip=True)
                 price = self._parse_price(price_text)
             
             # Ort - verschiedene Selektoren
@@ -229,13 +237,26 @@ class KleinanzeigenScraper:
             if time_elem:
                 posted_time = time_elem.get_text(strip=True)
             
+            # Prüfe ob es ein Gesuch ist (Suchanzeige)
+            is_gesuch = False
+            title_lower = title.lower()
+            # Prüfe Titel auf Gesuch-Indikatoren
+            if any(indicator in title_lower for indicator in ["suche", "gesuch", "sucht", "wanted"]):
+                is_gesuch = True
+            # Prüfe auch HTML-Attribute/Klassen für Gesuch-Indikatoren
+            if ad_element.find("span", class_=re.compile(r"gesuch|wanted", re.I)):
+                is_gesuch = True
+            if "gesuch" in str(ad_element.get("class", [])).lower():
+                is_gesuch = True
+            
             return {
                 "id": ad_id,
                 "title": title,
                 "price": price,
                 "location": location,
                 "link": link,
-                "posted_time": posted_time
+                "posted_time": posted_time,
+                "is_gesuch": is_gesuch
             }
         except Exception as e:
             logger.debug(f"Fehler beim Parsen einer Anzeige: {e}")

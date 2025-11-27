@@ -160,6 +160,41 @@ class Database:
             logger.error(f"Fehler beim Abrufen der letzten Anzeigen: {e}")
             return []
     
+    def get_newest_ads(self, limit: int = 5) -> List[Dict]:
+        """
+        Gibt die neuesten N Anzeigen zurück (sortiert: neueste zuerst).
+        
+        Args:
+            limit: Anzahl der zurückzugebenden Anzeigen
+            
+        Returns:
+            Liste von Anzeigen-Dictionaries (sortiert nach fetched_at DESC, neueste zuerst)
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    """SELECT ad_id, title, price, link, location, posted_time, fetched_at 
+                       FROM seen_ads 
+                       ORDER BY fetched_at DESC 
+                       LIMIT ?""",
+                    (limit,)
+                )
+                rows = cursor.fetchall()
+                ads = []
+                for row in rows:
+                    ads.append({
+                        "id": row["ad_id"],
+                        "title": row["title"],
+                        "price": row["price"],
+                        "link": row["link"] or "",
+                        "location": row["location"] or "",
+                        "posted_time": row["posted_time"] or ""
+                    })
+                return ads
+        except sqlite3.Error as e:
+            logger.error(f"Fehler beim Abrufen der neuesten Anzeigen: {e}")
+            return []
+    
     def cleanup_old_entries(self, days: int = 30) -> int:
         """
         Löscht alte Einträge aus der Datenbank.

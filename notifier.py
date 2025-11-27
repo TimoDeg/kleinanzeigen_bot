@@ -130,7 +130,13 @@ class Notifier:
                     await asyncio.sleep(self.message_delay)
                     
             except TelegramError as e:
-                logger.error(f"Telegram-Fehler beim Senden der Nachricht: {e}")
+                error_msg = str(e).lower()
+                # Rate Limiting: Warte länger bei 429 Fehlern
+                if "429" in error_msg or "rate limit" in error_msg or "too many requests" in error_msg:
+                    logger.warning(f"Telegram Rate Limit erreicht. Warte 60 Sekunden...")
+                    await asyncio.sleep(60)
+                else:
+                    logger.error(f"Telegram-Fehler beim Senden der Nachricht: {e}")
             except Exception as e:
                 logger.error(f"Unerwarteter Fehler beim Senden der Telegram-Nachricht: {e}")
         

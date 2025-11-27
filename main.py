@@ -161,6 +161,7 @@ class KleinanzeigenBot:
         Returns:
             Gefilterte Liste von Anzeigen
         """
+        logger = logging.getLogger(__name__)
         filtered = []
         
         for ad in ads:
@@ -171,6 +172,11 @@ class KleinanzeigenBot:
                     continue
                 if self.price_max is not None and price > self.price_max:
                     continue
+            
+            # Gesuche (Suchanzeigen) ausschließen - nur Angebote
+            if ad.get("is_gesuch", False):
+                logger.info(f"Anzeige ausgeschlossen (Gesuch): {ad.get('title', '')[:50]}")
+                continue
             
             # Keyword-Ausschluss (case-insensitive)
             title_lower = ad.get("title", "").lower()
@@ -306,13 +312,9 @@ class KleinanzeigenBot:
             
             # Sende Benachrichtigungen (sortiert: ältere zuerst)
             if new_ads:
-                # Sortiere nach ID (niedrigere ID = älter)
-                def sort_key(ad):
-                    try:
-                        return int(ad.get("id", 0))
-                    except (ValueError, TypeError):
-                        return 0
-                new_ads_sorted = sorted(new_ads, key=sort_key)
+                # Anzeigen kommen bereits nach "neueste" sortiert (neueste zuerst)
+                # Umkehren, damit ältere zuerst gesendet werden
+                new_ads_sorted = list(reversed(new_ads))
                 await self.notifier.send_telegram(new_ads_sorted)
             else:
                 logger.info("Keine neuen Anzeigen")
@@ -419,19 +421,18 @@ class KleinanzeigenBot:
         
         # Sende die letzten 3 Anzeigen beim Start
         logger.info("Sende die letzten 3 Anzeigen beim Start...")
-        last_ads = self.database.get_last_ads(limit=3)
-        if last_ads:
-            # Sortiere nach ID (niedrigere ID = älter)
-            def sort_key(ad):
-                try:
-                    return int(ad.get("id", 0))
-                except (ValueError, TypeError):
-                    return 0
-            last_ads_sorted = sorted(last_ads, key=sort_key)
-            await self.notifier.send_telegram(last_ads_sorted)
-            logger.info(f"Letzte {len(last_ads_sorted)} Anzeigen beim Start gesendet")
-        else:
-            logger.info("Keine Anzeigen in der Datenbank zum Senden beim Start")
+        try:
+            last_ads = self.database.get_last_ads(limit=3)
+            if last_ads:
+                # Datenbank gibt bereits nach ID sortiert zurück (niedrigere ID = älter)
+                # Das ist bereits die richtige Reihenfolge (ältere zuerst)
+                await self.notifier.send_telegram(last_ads)
+                logger.info(f"Letzte {len(last_ads)} Anzeigen beim Start gesendet")
+            else:
+                logger.info("Keine Anzeigen in der Datenbank zum Senden beim Start")
+        except Exception as e:
+            logger.error(f"Fehler beim Senden der letzten Anzeigen beim Start: {e}")
+            # Fehler nicht kritisch - Bot läuft weiter
         
         while self.running:
             try:
