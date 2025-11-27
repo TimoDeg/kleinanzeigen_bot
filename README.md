@@ -4,29 +4,23 @@ Ein produktionsreifer Python-Bot zum automatischen Scraping von eBay Kleinanzeig
 
 ## 📋 Voraussetzungen
 
-- Ubuntu 20.04 oder höher (getestet auf Ubuntu 22.04)
+- Ubuntu 20.04 oder höher
 - Python 3.9 oder höher
 - Internetverbindung
 - Telegram Account
 
 ---
 
-## 🚀 Schnellstart (Ubuntu)
+## 🚀 Installation (5 Minuten)
 
-### Schritt 1: System aktualisieren
+### Schritt 1: System vorbereiten
 
 ```bash
 sudo apt update
-sudo apt upgrade -y
+sudo apt install python3 python3-pip python3-venv git -y
 ```
 
-### Schritt 2: Python und pip installieren
-
-```bash
-sudo apt install python3 python3-pip python3-venv -y
-```
-
-### Schritt 3: Projekt herunterladen
+### Schritt 2: Projekt herunterladen
 
 ```bash
 cd ~
@@ -34,90 +28,74 @@ git clone https://github.com/TimoDeg/kleinanzeigen_bot.git
 cd kleinanzeigen_bot
 ```
 
-**Oder falls du die Dateien manuell kopiert hast:**
-```bash
-cd ~
-mkdir kleinanzeigen_scraper
-cd kleinanzeigen_scraper
-# Kopiere alle Dateien hier hinein
-```
+**Falls Git nicht installiert ist oder du die Dateien manuell kopieren willst:**
+- Lade das Projekt als ZIP von GitHub herunter
+- Entpacke es in `~/kleinanzeigen_bot`
 
-### Schritt 4: Virtual Environment erstellen
+### Schritt 3: Virtual Environment erstellen
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-**Wichtig:** Du musst das Virtual Environment jedes Mal aktivieren, wenn du den Bot startest:
+**Wichtig:** Du musst das Virtual Environment jedes Mal aktivieren:
 ```bash
 source venv/bin/activate
 ```
 
-### Schritt 5: Dependencies installieren
+### Schritt 4: Dependencies installieren
 
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Schritt 6: Telegram Bot erstellen
+### Schritt 5: Chat-ID herausfinden (30 Sekunden)
 
-1. Öffne Telegram (App oder Web)
-2. Suche nach **@BotFather**
-3. Sende `/newbot`
-4. Folge den Anweisungen:
-   - Gib einen Namen für deinen Bot ein (z.B. "Mein Kleinanzeigen Bot")
-   - Gib einen Username ein (muss auf `bot` enden, z.B. "mein_kleinanzeigen_bot")
-5. **Speichere den Bot Token** (sieht aus wie: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
+**Einfachste Methode:**
 
-### Schritt 7: Chat-ID herausfinden
+1. Öffne Telegram
+2. Suche nach **@userinfobot**
+3. Starte den Bot und sende `/start`
+4. Der Bot zeigt dir deine Chat-ID an (z.B. `123456789`)
+5. **Kopiere diese Nummer**
 
-**Methode 1: Über @userinfobot (Einfachste Methode)**
+**Alternative Methode (falls @userinfobot nicht funktioniert):**
 
-1. Suche in Telegram nach **@userinfobot**
-2. Starte den Bot und sende `/start`
-3. Der Bot zeigt dir deine Chat-ID an (z.B. `123456789`)
-4. **Kopiere diese Nummer**
-
-**Methode 2: Über die API**
-
-1. Sende eine Nachricht an deinen Bot (den du gerade erstellt hast)
+1. Sende eine Nachricht an deinen Bot
 2. Führe diesen Befehl aus (ersetze `DEIN_BOT_TOKEN` mit deinem Token):
 
 ```bash
 curl https://api.telegram.org/botDEIN_BOT_TOKEN/getUpdates
 ```
 
-3. Suche in der Ausgabe nach `"chat":{"id":123456789}` - das ist deine Chat-ID
+3. Suche nach `"chat":{"id":123456789}` - das ist deine Chat-ID
 
-### Schritt 8: Konfiguration anpassen
+### Schritt 6: Konfiguration anpassen
 
-Öffne die `config.json` Datei:
+Öffne `config.json`:
 
 ```bash
 nano config.json
 ```
 
-**Ändere folgende Werte:**
+**Ändere nur diese beiden Werte:**
 
 ```json
 {
   "telegram": {
     "token": "DEIN_BOT_TOKEN_HIER",
     "chat_id": "DEINE_CHAT_ID_HIER"
-  },
-  "search": {
-    "keyword": "DDR5 RAM",
-    "price_min": 70,
-    "price_max": 251
   }
 }
 ```
 
 **Speichern:** `Strg+O`, dann `Enter`, dann `Strg+X`
 
-### Schritt 9: Testen
+**Hinweis:** Der Bot Token ist bereits in der `config.json` eingetragen. Du musst nur deine Chat-ID eintragen!
+
+### Schritt 7: Testen
 
 **Telegram-Verbindung testen:**
 ```bash
@@ -137,7 +115,7 @@ python3 main.py --test
 
 ## 🎯 Bot starten
 
-### Option 1: Manuell starten (für Tests)
+### Option 1: Manuell (für Tests)
 
 ```bash
 cd ~/kleinanzeigen_bot
@@ -175,7 +153,7 @@ screen -r kleinanzeigen-bot
 # Dann Strg+C zum Stoppen
 ```
 
-### Option 3: Als Systemd Service (Auto-Start)
+### Option 3: Als Systemd Service (Auto-Start beim Boot)
 
 **1. Service-Datei anpassen:**
 
@@ -183,7 +161,7 @@ screen -r kleinanzeigen-bot
 nano kleinanzeigen-bot.service
 ```
 
-**Ändere folgende Zeilen** (ersetze `dein_benutzername` mit deinem Ubuntu-Benutzernamen):
+**Ändere folgende Zeilen** (ersetze `dein_benutzername` mit deinem Ubuntu-Benutzernamen - finde ihn mit `whoami`):
 
 ```ini
 [Service]
@@ -290,7 +268,7 @@ pip install -r requirements.txt
 
 **Lösung:**
 1. Öffne `config.json`
-2. Füge deine Chat-ID ein (siehe Schritt 7)
+2. Füge deine Chat-ID ein (siehe Schritt 5)
 3. Speichere die Datei
 
 ### Problem: "Telegram-Fehler: Unauthorized"
@@ -403,15 +381,13 @@ Dieses Projekt ist für den persönlichen Gebrauch bestimmt. Beachte die Nutzung
 
 - [ ] Ubuntu aktualisiert
 - [ ] Python 3 und pip installiert
-- [ ] Projekt heruntergeladen
-- [ ] Virtual Environment erstellt
-- [ ] Dependencies installiert
-- [ ] Telegram Bot erstellt (Bot Token gespeichert)
-- [ ] Chat-ID herausgefunden
-- [ ] `config.json` angepasst (Token + Chat-ID)
+- [ ] Projekt heruntergeladen (`git clone` oder ZIP)
+- [ ] Virtual Environment erstellt (`python3 -m venv venv`)
+- [ ] Dependencies installiert (`pip install -r requirements.txt`)
+- [ ] Chat-ID herausgefunden (@userinfobot)
+- [ ] `config.json` angepasst (Chat-ID eingetragen)
 - [ ] Telegram-Test erfolgreich (`--test-telegram`)
 - [ ] Scraping-Test erfolgreich (`--test`)
 - [ ] Bot gestartet (Screen oder Systemd)
 
 **Fertig! Der Bot läuft jetzt und sendet dir automatisch Benachrichtigungen bei neuen DDR5 RAM Anzeigen.** 🎉
-
