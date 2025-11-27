@@ -30,6 +30,7 @@ class KleinanzeigenBot:
         """
         self.config = self._load_config(config_path)
         self._setup_logging()
+        self._validate_config()
         
         # Initialisiere Komponenten
         search_config = self.config["search"]
@@ -101,6 +102,33 @@ class KleinanzeigenBot:
             format=format_str,
             datefmt="%Y-%m-%d %H:%M:%S"
         )
+    
+    def _validate_config(self) -> None:
+        """Validiert die Konfiguration und gibt Warnungen aus."""
+        logger = logging.getLogger(__name__)
+        
+        # Prüfe Telegram-Konfiguration
+        telegram_config = self.config.get("telegram", {})
+        if not telegram_config.get("token"):
+            logger.warning("⚠️  Telegram Token ist nicht gesetzt! Benachrichtigungen werden nicht funktionieren.")
+        if not telegram_config.get("chat_id"):
+            logger.warning("⚠️  Telegram Chat-ID ist nicht gesetzt! Benachrichtigungen werden nicht gesendet.")
+            logger.warning("   Verwende 'python3 main.py --test-telegram' nach dem Setzen der Chat-ID.")
+        
+        # Prüfe Suchparameter
+        search_config = self.config.get("search", {})
+        if not search_config.get("keyword"):
+            logger.warning("⚠️  Kein Suchbegriff konfiguriert!")
+        
+        # Prüfe Scraper-Einstellungen
+        scraper_config = self.config.get("scraper", {})
+        if scraper_config.get("interval_seconds", 0) < 60:
+            logger.warning("⚠️  Intervall ist sehr kurz (< 60s). Das könnte zu Rate-Limiting führen.")
+        
+        # Prüfe Datenbank
+        db_config = self.config.get("database", {})
+        if not db_config.get("path"):
+            logger.warning("⚠️  Kein Datenbankpfad konfiguriert!")
     
     def _signal_handler(self, signum, frame) -> None:
         """

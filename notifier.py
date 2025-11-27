@@ -8,10 +8,10 @@ import asyncio
 from typing import List, Dict, Optional
 
 try:
-    from telegram import Bot
-    from telegram.error import TelegramError
+    from telegram import Bot  # type: ignore
+    from telegram.error import TelegramError  # type: ignore
 except ImportError:
-    Bot = None
+    Bot = None  # type: ignore
     TelegramError = Exception
 
 logger = logging.getLogger(__name__)
