@@ -172,3 +172,4 @@ class Database:
             logger.error(f"Fehler beim Abrufen der Statistiken: {e}")
             return {"total": 0, f"last_{days}_days": 0}
 
+

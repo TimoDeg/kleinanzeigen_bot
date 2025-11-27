@@ -164,3 +164,4 @@ class Notifier:
             logger.error(f"Unerwarteter Fehler: {e}")
             return False
 
+
