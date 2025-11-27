@@ -327,6 +327,12 @@ class KleinanzeigenScraper:
                 logger.info(f"Erfolgreich {len(ads)} Anzeigen abgerufen")
                 return ads
                 
+            except requests.exceptions.Timeout as e:
+                logger.warning(f"Timeout-Fehler (Versuch {attempt}/{self.max_retries}): {e}")
+                if attempt < self.max_retries:
+                    time.sleep(self.retry_delay)
+                else:
+                    logger.error(f"Alle Versuche fehlgeschlagen (Timeout): {e}")
             except requests.exceptions.RequestException as e:
                 logger.warning(f"Request-Fehler (Versuch {attempt}/{self.max_retries}): {e}")
                 if attempt < self.max_retries:
@@ -334,7 +340,7 @@ class KleinanzeigenScraper:
                 else:
                     logger.error(f"Alle Versuche fehlgeschlagen: {e}")
             except Exception as e:
-                logger.error(f"Unerwarteter Fehler beim Scraping: {e}")
+                logger.error(f"Unerwarteter Fehler beim Scraping: {e}", exc_info=True)
                 break
         
         return ads

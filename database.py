@@ -127,20 +127,23 @@ class Database:
     
     def get_last_ads(self, limit: int = 2) -> List[Dict]:
         """
-        Gibt die letzten N Anzeigen zurück (sortiert: ältere zuerst).
+        Gibt die letzten N Anzeigen zurück (chronologisch sortiert: ältere zuerst).
         
         Args:
-            limit: Anzahl der zurückzugebenden Anzeigen
+            limit: Anzahl der zurückzugebenden Anzeigen (max 100)
             
         Returns:
-            Liste von Anzeigen-Dictionaries (sortiert nach ID, niedrigere ID = älter)
+            Liste von Anzeigen-Dictionaries (chronologisch sortiert: ältere zuerst)
         """
+        # Begrenze Limit auf sinnvollen Wert
+        limit = min(max(1, limit), 100)
+        
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute(
                     """SELECT ad_id, title, price, link, location, posted_time, fetched_at 
                        FROM seen_ads 
-                       ORDER BY CAST(ad_id AS INTEGER) ASC 
+                       ORDER BY fetched_at ASC 
                        LIMIT ?""",
                     (limit,)
                 )
@@ -149,7 +152,7 @@ class Database:
                 for row in rows:
                     ads.append({
                         "id": row["ad_id"],
-                        "title": row["title"],
+                        "title": row["title"] or "",
                         "price": row["price"],
                         "link": row["link"] or "",
                         "location": row["location"] or "",
@@ -157,7 +160,7 @@ class Database:
                     })
                 return ads
         except sqlite3.Error as e:
-            logger.error(f"Fehler beim Abrufen der letzten Anzeigen: {e}")
+            logger.error(f"Fehler beim Abrufen der letzten Anzeigen: {e}", exc_info=True)
             return []
     
     def get_newest_ads(self, limit: int = 5) -> List[Dict]:
@@ -165,11 +168,14 @@ class Database:
         Gibt die neuesten N Anzeigen zurück (sortiert: neueste zuerst).
         
         Args:
-            limit: Anzahl der zurückzugebenden Anzeigen
+            limit: Anzahl der zurückzugebenden Anzeigen (max 100)
             
         Returns:
             Liste von Anzeigen-Dictionaries (sortiert nach fetched_at DESC, neueste zuerst)
         """
+        # Begrenze Limit auf sinnvollen Wert
+        limit = min(max(1, limit), 100)
+        
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute(
@@ -184,7 +190,7 @@ class Database:
                 for row in rows:
                     ads.append({
                         "id": row["ad_id"],
-                        "title": row["title"],
+                        "title": row["title"] or "",
                         "price": row["price"],
                         "link": row["link"] or "",
                         "location": row["location"] or "",
@@ -192,7 +198,7 @@ class Database:
                     })
                 return ads
         except sqlite3.Error as e:
-            logger.error(f"Fehler beim Abrufen der neuesten Anzeigen: {e}")
+            logger.error(f"Fehler beim Abrufen der neuesten Anzeigen: {e}", exc_info=True)
             return []
     
     def cleanup_old_entries(self, days: int = 30) -> int:

@@ -345,8 +345,11 @@ class KleinanzeigenBot:
             
             while self.running:
                 try:
-                    # Hole Updates über die Bot-API
-                    updates_response = await bot.get_updates(offset=last_update_id + 1, timeout=10)
+                    # Hole Updates über die Bot-API mit Timeout
+                    updates_response = await asyncio.wait_for(
+                        bot.get_updates(offset=last_update_id + 1, timeout=10),
+                        timeout=15.0
+                    )
                     
                     if updates_response:
                         for update in updates_response:
@@ -358,37 +361,68 @@ class KleinanzeigenBot:
                                 
                                 # Prüfe ob Nachricht von konfigurierter Chat-ID kommt
                                 if chat_id != self.config["telegram"]["chat_id"]:
+                                    logger.debug(f"Ignoriere Nachricht von unbekannter Chat-ID: {chat_id}")
                                     continue
                                 
                                 # Reagiere auf "test" Befehl
                                 if text == "test" or text == "/test":
                                     logger.info("Test-Befehl empfangen")
-                                    last_ads = self.database.get_last_ads(limit=2)
-                                    
-                                    if last_ads:
-                                        await self.notifier.send_telegram(last_ads)
+                                    try:
+                                        # Hole die neuesten Anzeigen (nur DDR5 RAM)
+                                        newest_ads = self.database.get_newest_ads(limit=10)
+                                        
+                                        # Filtere nur DDR5 RAM Anzeigen
+                                        ddr5_ads = [ad for ad in newest_ads if "ddr5" in ad.get("title", "").lower()]
+                                        ddr5_ads = ddr5_ads[:5]  # Maximal 5 Anzeigen
+                                        
+                                        if ddr5_ads:
+                                            # Sortiere: ältere zuerst (umgekehrte Reihenfolge)
+                                            ddr5_ads_sorted = list(reversed(ddr5_ads))
+                                            sent_count = await self.notifier.send_telegram(ddr5_ads_sorted)
+                                            if sent_count > 0:
+                                                await bot.send_message(
+                                                    chat_id=chat_id,
+                                                    text=f"✅ {len(ddr5_ads_sorted)} neueste DDR5 RAM Anzeigen gesendet"
+                                                )
+                                            else:
+                                                await bot.send_message(
+                                                    chat_id=chat_id,
+                                                    text="❌ Fehler beim Senden der Anzeigen"
+                                                )
+                                        else:
+                                            await bot.send_message(
+                                                chat_id=chat_id,
+                                                text="❌ Keine DDR5 RAM Anzeigen in der Datenbank gefunden"
+                                            )
+                                    except Exception as e:
+                                        logger.error(f"Fehler beim Verarbeiten des Test-Befehls: {e}", exc_info=True)
                                         await bot.send_message(
                                             chat_id=chat_id,
-                                            text=f"✅ {len(last_ads)} Anzeigen gesendet"
-                                        )
-                                    else:
-                                        await bot.send_message(
-                                            chat_id=chat_id,
-                                            text="❌ Keine Anzeigen in der Datenbank gefunden"
+                                            text="❌ Fehler beim Abrufen der Anzeigen"
                                         )
                                 
                                 # Reagiere auf "status" Befehl
                                 elif text == "status" or text == "/status":
                                     logger.info("Status-Befehl empfangen")
-                                    status_msg = self._get_status_message()
-                                    await bot.send_message(
-                                        chat_id=chat_id,
-                                        text=status_msg,
-                                        parse_mode="Markdown"
-                                    )
+                                    try:
+                                        status_msg = self._get_status_message()
+                                        await bot.send_message(
+                                            chat_id=chat_id,
+                                            text=status_msg,
+                                            parse_mode="Markdown"
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"Fehler beim Verarbeiten des Status-Befehls: {e}", exc_info=True)
+                                        await bot.send_message(
+                                            chat_id=chat_id,
+                                            text="❌ Fehler beim Abrufen des Status"
+                                        )
                     
+                except asyncio.TimeoutError:
+                    # Timeout ist normal, einfach weiter
+                    continue
                 except Exception as e:
-                    logger.debug(f"Fehler beim Abrufen von Telegram-Updates: {e}")
+                    logger.warning(f"Fehler beim Abrufen von Telegram-Updates: {e}")
                     await asyncio.sleep(5)
                     
         except Exception as e:
@@ -419,19 +453,33 @@ class KleinanzeigenBot:
         await asyncio.sleep(2)  # Kurz warten, damit Handler bereit ist
         await self._send_welcome_message()
         
-        # Sende die letzten 3 Anzeigen beim Start
-        logger.info("Sende die letzten 3 Anzeigen beim Start...")
+        # Sende die letzten 3 Anzeigen beim Start (nur DDR5 RAM)
+        logger.info("Sende die letzten 3 DDR5 RAM Anzeigen beim Start...")
         try:
-            last_ads = self.database.get_last_ads(limit=3)
-            if last_ads:
-                # Datenbank gibt bereits nach ID sortiert zurück (niedrigere ID = älter)
-                # Das ist bereits die richtige Reihenfolge (ältere zuerst)
-                await self.notifier.send_telegram(last_ads)
-                logger.info(f"Letzte {len(last_ads)} Anzeigen beim Start gesendet")
+            # Hole mehr Anzeigen, um sicherzustellen, dass wir genug DDR5 RAM Anzeigen finden
+            last_ads = self.database.get_last_ads(limit=20)
+            
+            # Filtere nur DDR5 RAM Anzeigen (chronologisch beibehalten)
+            ddr5_ads = []
+            for ad in last_ads:
+                title_lower = ad.get("title", "").lower()
+                # Prüfe ob "ddr5" im Titel enthalten ist (case-insensitive)
+                if "ddr5" in title_lower:
+                    ddr5_ads.append(ad)
+                    if len(ddr5_ads) >= 3:
+                        break
+            
+            if ddr5_ads:
+                # Sortiert bereits chronologisch (alt zu neu) durch fetched_at ASC
+                sent_count = await self.notifier.send_telegram(ddr5_ads)
+                if sent_count > 0:
+                    logger.info(f"Letzte {len(ddr5_ads)} DDR5 RAM Anzeigen beim Start gesendet (chronologisch: alt zu neu)")
+                else:
+                    logger.warning("Anzeigen konnten nicht gesendet werden")
             else:
-                logger.info("Keine Anzeigen in der Datenbank zum Senden beim Start")
+                logger.info("Keine DDR5 RAM Anzeigen in der Datenbank zum Senden beim Start")
         except Exception as e:
-            logger.error(f"Fehler beim Senden der letzten Anzeigen beim Start: {e}")
+            logger.error(f"Fehler beim Senden der letzten Anzeigen beim Start: {e}", exc_info=True)
             # Fehler nicht kritisch - Bot läuft weiter
         
         while self.running:
