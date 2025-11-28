@@ -1,625 +1,422 @@
 #!/usr/bin/env python3
 """
-Hauptprogramm für den eBay Kleinanzeigen Scraper-Bot.
-Läuft als endlose Schleife und sendet Benachrichtigungen bei neuen Anzeigen.
+Hauptprogramm für den eBay Kleinanzeigen Scraper-Bot (Multi-Search).
 """
 
+import argparse
 import asyncio
 import json
 import logging
 import signal
 import sys
-import argparse
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict, List
 
-from scraper import KleinanzeigenScraper
-from notifier import Notifier
 from database import Database
+from notifier import Notifier
+from scraper import KleinanzeigenScraper
+from telegram_handler import TelegramHandler
 
 
 class KleinanzeigenBot:
-    """Hauptklasse für den Kleinanzeigen-Bot."""
-    
-    def __init__(self, config_path: str = "config.json"):
+    """Hauptklasse für den Kleinanzeigen-Bot mit Multi-Search Support."""
+
+    def __init__(self, config_path: str = "config.json") -> None:
         """
         Initialisiert den Bot mit Konfiguration.
-        
-        Args:
-            config_path: Pfad zur Konfigurationsdatei
         """
         self.config = self._load_config(config_path)
         self._setup_logging()
         self._validate_config()
-        
-        # Initialisiere Komponenten
-        search_config = self.config["search"]
-        scraper_config = self.config["scraper"]
+
         telegram_config = self.config["telegram"]
+        scraper_config = self.config["scraper"]
         db_config = self.config["database"]
-        
-        self.scraper = KleinanzeigenScraper(
-            keyword=search_config["keyword"],
-            category=search_config["category"],
-            sort=search_config["sort"],
-            user_agent=scraper_config["user_agent"],
-            timeout=scraper_config["request_timeout"],
-            delay_min=scraper_config["request_delay_min"],
-            delay_max=scraper_config["request_delay_max"],
-            max_retries=scraper_config["max_retries"],
-            retry_delay=scraper_config["retry_delay"]
-        )
-        
-        # Unterstütze sowohl chat_id (String) als auch chat_ids (Liste) für Rückwärtskompatibilität
-        chat_ids = telegram_config.get("chat_ids")
-        if not chat_ids:
-            # Fallback auf chat_id für Rückwärtskompatibilität
-            chat_id = telegram_config.get("chat_id")
-            chat_ids = [chat_id] if chat_id else []
-        
+
+        self.database = Database(db_config["path"])
+
+        chat_ids = telegram_config.get("chat_ids", [])
+        self.chat_ids = [str(cid) for cid in chat_ids]
+
         self.notifier = Notifier(
             token=telegram_config["token"],
-            chat_ids=chat_ids
+            chat_ids=chat_ids,
         )
-        
-        # Speichere Chat-IDs für Befehl-Handler
-        self.chat_ids = [str(cid) for cid in chat_ids]
-        
-        self.database = Database(db_config["path"])
-        
-        # Konfiguration
-        self.interval = scraper_config["interval_seconds"]
-        self.price_min = search_config.get("price_min")
-        self.price_max = search_config.get("price_max")
-        self.exclude_keywords = search_config.get("exclude_keywords", [])
-        
-        # Shutdown-Flag
+
+        self.scraper_config = scraper_config
+
+        # Geizhals API (optional)
+        try:
+            from geizhals_api import GeizhalsAPI
+
+            self.geizhals = GeizhalsAPI()
+            self.geizhals_enabled = True
+            logging.getLogger(__name__).info("✅ Geizhals-Integration aktiviert")
+        except ImportError:
+            self.geizhals = None
+            self.geizhals_enabled = False
+            logging.getLogger(__name__).info("⚠️  Geizhals-Integration nicht verfügbar")
+
+        # OCR Service (optional)
+        try:
+            from ocr_service import ArticleNumberOCR
+
+            self.ocr = ArticleNumberOCR()
+            self.ocr_enabled = True
+            logging.getLogger(__name__).info("✅ OCR-Service aktiviert")
+        except Exception:
+            self.ocr = None
+            self.ocr_enabled = False
+            logging.getLogger(__name__).info("⚠️  OCR-Service nicht verfügbar")
+
         self.running = True
-        
-        # Signal-Handler für graceful shutdown
+
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
-        
-        # Telegram-Befehl-Handler
-        self.telegram_handler_task = None
-        
-        # Statistiken
+
+        from telegram.ext import Application
+
+        self.telegram_app = Application.builder().token(telegram_config["token"]).build()
+
+        self.telegram_handler = TelegramHandler(
+            database=self.database,
+            allowed_chat_ids=self.chat_ids,
+        )
+        for handler in self.telegram_handler.get_handlers():
+            self.telegram_app.add_handler(handler)
+
         from datetime import datetime
+
         self.start_time = datetime.now()
-        self.run_count = 0
-        self.last_run_time = None
-    
+
     def _load_config(self, config_path: str) -> dict:
-        """
-        Lädt die Konfiguration aus einer JSON-Datei.
-        
-        Args:
-            config_path: Pfad zur Konfigurationsdatei
-            
-        Returns:
-            Konfigurations-Dictionary
-        """
+        """Lädt Konfiguration."""
         config_file = Path(config_path)
         if not config_file.exists():
             raise FileNotFoundError(f"Konfigurationsdatei nicht gefunden: {config_path}")
-        
+
         try:
             with open(config_file, "r", encoding="utf-8") as f:
                 config = json.load(f)
             return config
         except json.JSONDecodeError as e:
             raise ValueError(f"Ungültige JSON-Konfiguration: {e}")
-    
+
     def _setup_logging(self) -> None:
-        """Konfiguriert das Logging-System."""
+        """Konfiguriert Logging."""
         log_config = self.config.get("logging", {})
         level = getattr(logging, log_config.get("level", "INFO").upper())
-        format_str = log_config.get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        
+        format_str = log_config.get(
+            "format",
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
+
         logging.basicConfig(
             level=level,
             format=format_str,
-            datefmt="%Y-%m-%d %H:%M:%S"
+            datefmt="%Y-%m-%d %H:%M:%S",
         )
-    
+
     def _validate_config(self) -> None:
-        """Validiert die Konfiguration und gibt Warnungen aus."""
+        """Validiert Konfiguration."""
         logger = logging.getLogger(__name__)
-        
-        # Prüfe Telegram-Konfiguration
+
         telegram_config = self.config.get("telegram", {})
         if not telegram_config.get("token"):
-            logger.warning("⚠️  Telegram Token ist nicht gesetzt! Benachrichtigungen werden nicht funktionieren.")
-        
+            logger.warning("⚠️  Telegram Token fehlt!")
+
         chat_ids = telegram_config.get("chat_ids", [])
-        chat_id = telegram_config.get("chat_id")
-        if not chat_ids and not chat_id:
-            logger.warning("⚠️  Telegram Chat-ID(s) sind nicht gesetzt! Benachrichtigungen werden nicht gesendet.")
-            logger.warning("   Verwende 'python3 main.py --test-telegram' nach dem Setzen der Chat-ID(s).")
-        elif chat_ids:
+        if not chat_ids:
+            logger.warning("⚠️  Keine Chat-IDs konfiguriert!")
+        else:
             logger.info(f"✅ Telegram konfiguriert für {len(chat_ids)} Chat-ID(s)")
-        elif chat_id:
-            logger.info("✅ Telegram konfiguriert für 1 Chat-ID (verwende 'chat_ids' für mehrere)")
-        
-        # Prüfe Suchparameter
-        search_config = self.config.get("search", {})
-        if not search_config.get("keyword"):
-            logger.warning("⚠️  Kein Suchbegriff konfiguriert!")
-        
-        # Prüfe Scraper-Einstellungen
-        scraper_config = self.config.get("scraper", {})
-        if scraper_config.get("interval_seconds", 0) < 60:
-            logger.warning("⚠️  Intervall ist sehr kurz (< 60s). Das könnte zu Rate-Limiting führen.")
-        
-        # Prüfe Datenbank
-        db_config = self.config.get("database", {})
-        if not db_config.get("path"):
-            logger.warning("⚠️  Kein Datenbankpfad konfiguriert!")
-    
-    def _signal_handler(self, signum, frame) -> None:
-        """
-        Signal-Handler für graceful shutdown.
-        
-        Args:
-            signum: Signal-Nummer
-            frame: Frame-Objekt
-        """
+
+    def _signal_handler(self, signum, frame) -> None:  # type: ignore[override]
+        """Signal Handler für graceful shutdown."""
         logger = logging.getLogger(__name__)
         logger.info(f"Signal {signum} empfangen. Beende Bot...")
         self.running = False
-    
-    def _filter_ads(self, ads: List[Dict]) -> List[Dict]:
+
+    def _should_run_search(self, search: Dict) -> bool:
         """
-        Filtert Anzeigen nach verschiedenen Kriterien.
-        
-        Args:
-            ads: Liste von Anzeigen
-            
-        Returns:
-            Gefilterte Liste von Anzeigen
+        Prüft ob Suche ausgeführt werden soll (Intervall abgelaufen).
+        """
+        if not search.get("last_check"):
+            return True
+
+        from datetime import datetime
+
+        try:
+            if isinstance(search["last_check"], str):
+                last_check = datetime.fromisoformat(search["last_check"])
+            else:
+                last_check = search["last_check"]
+
+            elapsed = datetime.now() - last_check
+            return elapsed.total_seconds() >= search["interval_seconds"]
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                f"Fehler beim Prüfen des Intervalls: {e}"
+            )
+            return True
+
+    async def _execute_search(self, search: Dict) -> None:
+        """
+        Führt eine einzelne Suche aus.
         """
         logger = logging.getLogger(__name__)
-        filtered = []
-        
+
+        try:
+            scraper = KleinanzeigenScraper(
+                keyword=search["keyword"],
+                category=search.get("category", "c225"),
+                sort="neueste",
+                user_agent=self.scraper_config["user_agent"],
+                timeout=self.scraper_config["request_timeout"],
+                delay_min=self.scraper_config["request_delay_min"],
+                delay_max=self.scraper_config["request_delay_max"],
+                max_retries=self.scraper_config["max_retries"],
+                retry_delay=self.scraper_config["retry_delay"],
+            )
+
+            ads = scraper.fetch_ads()
+            logger.info(f"[Search {search['search_id']}] Gefundene Anzeigen: {len(ads)}")
+
+            if not ads:
+                return
+
+            filtered_ads = self._filter_ads(ads, search)
+            logger.info(
+                f"[Search {search['search_id']}] Nach Filterung: {len(filtered_ads)} Anzeigen"
+            )
+
+            new_ads = self._get_new_ads(filtered_ads, search["search_id"])
+            logger.info(
+                f"[Search {search['search_id']}] Neue Anzeigen: {len(new_ads)}"
+            )
+
+            if self.ocr_enabled and new_ads:
+                await self._process_ocr(new_ads)
+
+            if self.geizhals_enabled and new_ads:
+                await self._process_geizhals(new_ads)
+
+            if new_ads:
+                new_ads_sorted = list(reversed(new_ads))
+                await self.notifier.send_telegram(new_ads_sorted)
+
+            self.database.update_search_last_check(search["search_id"])
+
+        except Exception as e:  # pragma: no cover - Netz/HTML Fehler
+            logger.error(f"[Search {search['search_id']}] Fehler: {e}", exc_info=True)
+
+    def _filter_ads(self, ads: List[Dict], search: Dict) -> List[Dict]:
+        """
+        Filtert Anzeigen nach Search-Kriterien.
+        """
+        logger = logging.getLogger(__name__)
+        filtered: List[Dict] = []
+
         for ad in ads:
-            # Preis-Filter
             price = ad.get("price")
             if price is not None:
-                if self.price_min is not None and price < self.price_min:
+                if search.get("price_min") is not None and price < search["price_min"]:
                     continue
-                if self.price_max is not None and price > self.price_max:
+                if search.get("price_max") is not None and price > search["price_max"]:
                     continue
-            
-            # Gesuche (Suchanzeigen) ausschließen - nur Angebote
+
             if ad.get("is_gesuch", False):
-                logger.info(f"Anzeige ausgeschlossen (Gesuch): {ad.get('title', '')[:50]}")
+                logger.debug(f"Gesuch ausgeschlossen: {ad.get('title', '')[:50]}")
                 continue
-            
-            # Keyword-Ausschluss (case-insensitive)
+
             title_lower = ad.get("title", "").lower()
             excluded = False
-            for keyword in self.exclude_keywords:
-                keyword_lower = keyword.lower()
-                # Prüfe ob Keyword im Titel enthalten ist
-                if keyword_lower in title_lower:
-                    logger.info(f"Anzeige ausgeschlossen (Keyword-Filter '{keyword}'): {ad.get('title', '')[:50]}")
+            for keyword in search.get("exclude_keywords", []):
+                if keyword.lower() in title_lower:
+                    logger.debug(
+                        f"Keyword-Filter '{keyword}': "
+                        f"{ad.get('title', '')[:50]}"
+                    )
                     excluded = True
                     break
             if excluded:
                 continue
-            
+
+            shipping_pref = search.get("shipping_preference", "both")
+            if shipping_pref != "both":
+                shipping_type = ad.get("shipping_type", "")
+                if shipping_pref == "pickup" and "Abholung" not in shipping_type:
+                    continue
+                if shipping_pref == "shipping" and "Versand" not in shipping_type:
+                    continue
+
             filtered.append(ad)
-        
+
         return filtered
-    
-    def _get_new_ads(self, ads: List[Dict]) -> List[Dict]:
+
+    def _get_new_ads(self, ads: List[Dict], search_id: int) -> List[Dict]:
         """
-        Filtert neue Anzeigen (noch nicht in der Datenbank).
-        
-        Args:
-            ads: Liste von Anzeigen
-            
-        Returns:
-            Liste von neuen Anzeigen
+        Filtert neue Anzeigen und speichert sie in DB.
         """
-        new_ads = []
-        
+        new_ads: List[Dict] = []
+
         for ad in ads:
             ad_id = ad.get("id")
             if not ad_id:
                 continue
-            
+
             if self.database.is_new_ad(ad_id):
                 new_ads.append(ad)
-                # Sofort als gesehen markieren, um Duplikate zu vermeiden
-                self.database.mark_as_seen(
-                    ad_id, 
-                    ad.get("title", ""), 
-                    ad.get("price"),
-                    ad.get("link"),
-                    ad.get("location"),
-                    ad.get("posted_time")
+                self.database.mark_as_seen_with_search(
+                    ad_id=ad_id,
+                    search_id=search_id,
+                    title=ad.get("title", ""),
+                    price=ad.get("price"),
+                    link=ad.get("link"),
+                    location=ad.get("location"),
+                    shipping_type=ad.get("shipping_type"),
+                    posted_time=ad.get("posted_time"),
                 )
-        
+
         return new_ads
-    
-    def _get_status_message(self) -> str:
-        """Erstellt eine Status-Nachricht mit Bot-Informationen."""
-        from datetime import datetime, timedelta
-        
-        # Berechne Laufzeit
-        uptime = datetime.now() - self.start_time
-        uptime_str = str(uptime).split('.')[0]  # Entferne Mikrosekunden
-        
-        # Letzter Durchlauf
-        if self.last_run_time:
-            last_run_delta = datetime.now() - self.last_run_time
-            last_run_str = f"{self.last_run_time.strftime('%Y-%m-%d %H:%M:%S')} (vor {str(last_run_delta).split('.')[0]})"
-        else:
-            last_run_str = "Noch nicht gelaufen"
-        
-        # Datenbank-Statistiken
-        db_stats = self.database.get_stats(days=1)
-        
-        # Konfiguration
-        interval_min = self.interval // 60
-        
-        message = "🤖 *Bot-Status*\n\n"
-        message += f"✅ *Status:* Läuft\n\n"
-        message += f"⏱ *Laufzeit:* {uptime_str}\n"
-        message += f"🔄 *Durchläufe:* {self.run_count}\n"
-        message += f"⏰ *Letzter Durchlauf:* {last_run_str}\n"
-        message += f"⏳ *Intervall:* {interval_min} Minuten\n\n"
-        message += f"📊 *Datenbank:*\n"
-        message += f"   • Gesamt: {db_stats['total']} Anzeigen\n"
-        message += f"   • Letzte 24h: {db_stats['last_1_days']} Anzeigen\n\n"
-        message += f"🔍 *Suche:*\n"
-        message += f"   • Keyword: {self.config['search']['keyword']}\n"
-        message += f"   • Preis: {self.price_min}€ - {self.price_max}€\n"
-        
-        return message
-    
-    async def _send_welcome_message(self) -> None:
-        """Sendet eine Willkommensnachricht mit verfügbaren Befehlen an alle Chat-IDs."""
-        try:
-            bot = await self.notifier._get_bot()
-            logger = logging.getLogger(__name__)
-            
-            welcome_msg = "🤖 *Kleinanzeigen-Bot gestartet!*\n\n"
-            welcome_msg += "📋 *Verfügbare Befehle:*\n"
-            welcome_msg += "   • `/test` - Zeigt die letzten 5 DDR5 RAM Anzeigen\n"
-            welcome_msg += "   • `/status` - Zeigt Bot-Status und Statistiken\n\n"
-            welcome_msg += "Der Bot sucht automatisch alle 5 Minuten nach neuen Anzeigen."
-            
-            success_count = 0
+
+    async def _process_ocr(self, ads: List[Dict]) -> None:
+        """
+        Führt OCR auf Bildern aus (sequenziell).
+        """
+        logger = logging.getLogger(__name__)
+
+        if not self.ocr:
+            return
+
+        for ad in ads:
+            images = ad.get("images") or []
+            images = images[:3]
+
+            if not images:
+                continue
+
+            for img_url in images:
+                try:
+                    article_nr = await self.ocr.extract_article_number(img_url)
+                    if article_nr:
+                        ad["ocr_article_nr"] = article_nr
+                        logger.info(f"OCR erkannt: {article_nr}")
+                        break
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"OCR Fehler: {e}")
+                    continue
+
+    async def _process_geizhals(self, ads: List[Dict]) -> None:
+        """
+        Führt Geizhals-Lookup aus.
+        """
+        logger = logging.getLogger(__name__)
+
+        if not self.geizhals:
+            return
+
+        for ad in ads:
+            try:
+                geizhals_data = await self.geizhals.match_product(ad)
+                if geizhals_data:
+                    ad["geizhals_data"] = geizhals_data
+                    logger.info(
+                        "Geizhals Match: %s - %s€",
+                        geizhals_data.get("model"),
+                        geizhals_data.get("price"),
+                    )
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"Geizhals Fehler: {e}")
+                continue
+
+    async def run(self) -> None:
+        """Hauptschleife des Bots."""
+        logger = logging.getLogger(__name__)
+        logger.info("🚀 Kleinanzeigen Bot gestartet")
+
+        async with self.telegram_app:
+            await self.telegram_app.initialize()
+            await self.telegram_app.start()
+            logger.info("✅ Telegram Bot bereit")
+
+            welcome_msg = (
+                "🤖 *Bot gestartet!*\n\n"
+                "Verwende /start für das Hauptmenü."
+            )
             for chat_id in self.chat_ids:
                 try:
-                    await bot.send_message(
+                    await self.telegram_app.bot.send_message(
                         chat_id=chat_id,
                         text=welcome_msg,
-                        parse_mode="Markdown"
+                        parse_mode="Markdown",
                     )
-                    success_count += 1
-                except Exception as e:
-                    logger.warning(f"Fehler beim Senden der Willkommensnachricht an Chat-ID {chat_id}: {e}")
-            
-            if success_count > 0:
-                logger.info(f"Willkommensnachricht gesendet an {success_count}/{len(self.chat_ids)} Chat-ID(s)")
-            else:
-                logger.error("Willkommensnachricht konnte an keine Chat-ID gesendet werden")
-        except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.error(f"Fehler beim Senden der Willkommensnachricht: {e}")
-    
-    async def _run_once(self) -> None:
-        """Führt einen einzelnen Scraping-Zyklus aus."""
-        logger = logging.getLogger(__name__)
-        
-        from datetime import datetime
-        self.last_run_time = datetime.now()
-        self.run_count += 1
-        
-        try:
-            # Scrape Anzeigen
-            ads = self.scraper.fetch_ads()
-            logger.info(f"Gefundene Anzeigen: {len(ads)}")
-            
-            if not ads:
-                logger.warning("Keine Anzeigen gefunden")
-                return
-            
-            # Filtere Anzeigen
-            filtered_ads = self._filter_ads(ads)
-            logger.info(f"Nach Filterung: {len(filtered_ads)} Anzeigen")
-            
-            # Finde neue Anzeigen
-            new_ads = self._get_new_ads(filtered_ads)
-            logger.info(f"Neue Anzeigen: {len(new_ads)}")
-            
-            # Sende Benachrichtigungen (sortiert: ältere zuerst, neueste zuletzt)
-            if new_ads:
-                # Sortiere nach posted_time (wann die Anzeige ursprünglich erstellt wurde)
-                # Falls posted_time nicht verfügbar, verwende die Reihenfolge vom Scraper
-                # Scraper gibt Anzeigen nach "neueste" sortiert zurück (neueste zuerst)
-                # Umkehren, damit ältere zuerst gesendet werden (chronologisch: alt zu neu)
-                def sort_key(ad):
-                    # Versuche nach posted_time zu sortieren, falls verfügbar
-                    posted_time = ad.get("posted_time", "")
-                    if posted_time:
-                        # Konvertiere "vor X Stunden/Tagen" zu einem Sortierwert
-                        # Je älter, desto kleiner der Wert
-                        try:
-                            if "vor" in posted_time.lower():
-                                # Vereinfachte Sortierung: je mehr "vor", desto älter
-                                return posted_time
-                        except:
-                            pass
-                    # Fallback: verwende die Reihenfolge (neueste zuerst, also umkehren)
-                    return ""
-                
-                # Sortiere nach posted_time (falls verfügbar), sonst behalte Reihenfolge
-                # Da Scraper neueste zuerst zurückgibt, umkehren für chronologisch
-                new_ads_sorted = list(reversed(new_ads))
-                logger.info(f"Anzeigen sortiert: {len(new_ads_sorted)} (chronologisch: alt zu neu, neueste zuletzt)")
-                await self.notifier.send_telegram(new_ads_sorted)
-            else:
-                logger.info("Keine neuen Anzeigen")
-            
-            # Datenbank aufräumen (einmal pro Tag)
-            if hasattr(self, "_last_cleanup"):
-                from datetime import datetime, timedelta
-                if datetime.now() - self._last_cleanup > timedelta(days=1):
-                    self.database.cleanup_old_entries(self.config["database"]["cleanup_days"])
-                    self._last_cleanup = datetime.now()
-            else:
-                from datetime import datetime
-                self._last_cleanup = datetime.now()
-                
-        except Exception as e:
-            logger.error(f"Fehler im Scraping-Zyklus: {e}", exc_info=True)
-    
-    async def _handle_telegram_commands(self) -> None:
-        """Behandelt Telegram-Befehle parallel zur Scraping-Schleife."""
-        logger = logging.getLogger(__name__)
-        
-        try:
-            bot = await self.notifier._get_bot()
-            logger.info("Telegram-Befehl-Handler gestartet")
-            
-            # Hole die letzten Update-ID
-            last_update_id = 0
-            
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"Konnte Welcome-Message nicht senden: {e}")
+
             while self.running:
                 try:
-                    # Hole Updates über die Bot-API mit Timeout
-                    updates_response = await asyncio.wait_for(
-                        bot.get_updates(offset=last_update_id + 1, timeout=10),
-                        timeout=15.0
-                    )
-                    
-                    if updates_response:
-                        for update in updates_response:
-                            last_update_id = update.update_id
-                            
-                            if update.message and update.message.text:
-                                text = update.message.text.strip().lower()
-                                chat_id = str(update.message.chat.id)
-                                
-                                # Prüfe ob Nachricht von einer konfigurierten Chat-ID kommt
-                                if chat_id not in self.chat_ids:
-                                    logger.debug(f"Ignoriere Nachricht von unbekannter Chat-ID: {chat_id}")
-                                    continue
-                                
-                                # Reagiere auf "test" Befehl
-                                if text == "test" or text == "/test":
-                                    logger.info("Test-Befehl empfangen")
-                                    try:
-                                        # Hole die neuesten Anzeigen aus der DB (sortiert: neueste zuerst)
-                                        newest_ads = self.database.get_newest_ads(limit=10)
-                                        
-                                        # Filtere nur DDR5 RAM Anzeigen
-                                        ddr5_ads = [ad for ad in newest_ads if "ddr5" in ad.get("title", "").lower()]
-                                        ddr5_ads = ddr5_ads[:5]  # Maximal 5 Anzeigen
-                                        
-                                        if ddr5_ads:
-                                            # Sortiere chronologisch: ältere zuerst, neueste zuletzt
-                                            # get_newest_ads gibt neueste zuerst zurück (DESC), also umkehren
-                                            ddr5_ads_sorted = list(reversed(ddr5_ads))
-                                            logger.info(f"Test-Befehl: {len(ddr5_ads_sorted)} Anzeigen sortiert (chronologisch: alt zu neu)")
-                                            sent_count = await self.notifier.send_telegram(ddr5_ads_sorted)
-                                            if sent_count > 0:
-                                                await bot.send_message(
-                                                    chat_id=chat_id,
-                                                    text=f"✅ {len(ddr5_ads_sorted)} DDR5 RAM Anzeigen gesendet (chronologisch: alt zu neu)"
-                                                )
-                                            else:
-                                                await bot.send_message(
-                                                    chat_id=chat_id,
-                                                    text="❌ Fehler beim Senden der Anzeigen"
-                                                )
-                                        else:
-                                            await bot.send_message(
-                                                chat_id=chat_id,
-                                                text="❌ Keine DDR5 RAM Anzeigen in der Datenbank gefunden"
-                                            )
-                                    except Exception as e:
-                                        logger.error(f"Fehler beim Verarbeiten des Test-Befehls: {e}", exc_info=True)
-                                        await bot.send_message(
-                                            chat_id=chat_id,
-                                            text="❌ Fehler beim Abrufen der Anzeigen"
-                                        )
-                                
-                                # Reagiere auf "status" Befehl
-                                elif text == "status" or text == "/status":
-                                    logger.info("Status-Befehl empfangen")
-                                    try:
-                                        status_msg = self._get_status_message()
-                                        await bot.send_message(
-                                            chat_id=chat_id,
-                                            text=status_msg,
-                                            parse_mode="Markdown"
-                                        )
-                                    except Exception as e:
-                                        logger.error(f"Fehler beim Verarbeiten des Status-Befehls: {e}", exc_info=True)
-                                        await bot.send_message(
-                                            chat_id=chat_id,
-                                            text="❌ Fehler beim Abrufen des Status"
-                                        )
-                    
-                except asyncio.TimeoutError:
-                    # Timeout ist normal, einfach weiter
-                    continue
-                except Exception as e:
-                    logger.warning(f"Fehler beim Abrufen von Telegram-Updates: {e}")
-                    await asyncio.sleep(5)
-                    
-        except Exception as e:
-            logger.error(f"Fehler im Telegram-Befehl-Handler: {e}", exc_info=True)
-    
-    async def run(self, test_mode: bool = False) -> None:
-        """
-        Hauptschleife des Bots.
-        
-        Args:
-            test_mode: Wenn True, wird nur einmal gescraped und dann beendet
-        """
-        logger = logging.getLogger(__name__)
-        logger.info("Kleinanzeigen-Bot gestartet")
-        
-        if test_mode:
-            logger.info("Test-Modus: Einmaliges Scraping")
-            await self._run_once()
-            logger.info("Test-Modus beendet")
-            return
-        
-        logger.info(f"Intervall: {self.interval} Sekunden")
-        
-        # Starte Telegram-Befehl-Handler parallel
-        self.telegram_handler_task = asyncio.create_task(self._handle_telegram_commands())
-        
-        # Sende Willkommensnachricht
-        await asyncio.sleep(2)  # Kurz warten, damit Handler bereit ist
-        await self._send_welcome_message()
-        
-        # Sende die letzten 3 Anzeigen beim Start (nur DDR5 RAM, chronologisch: alt zu neu)
-        logger.info("Sende die letzten 3 DDR5 RAM Anzeigen beim Start (chronologisch: alt zu neu)...")
-        try:
-            # Hole mehr Anzeigen, um sicherzustellen, dass wir genug DDR5 RAM Anzeigen finden
-            # get_last_ads sortiert bereits chronologisch (alt zu neu) mit ORDER BY fetched_at ASC
-            last_ads = self.database.get_last_ads(limit=20)
-            
-            # Filtere nur DDR5 RAM Anzeigen (chronologische Reihenfolge beibehalten)
-            ddr5_ads = []
-            for ad in last_ads:
-                title_lower = ad.get("title", "").lower()
-                # Prüfe ob "ddr5" im Titel enthalten ist (case-insensitive)
-                if "ddr5" in title_lower:
-                    ddr5_ads.append(ad)
-                    if len(ddr5_ads) >= 3:
-                        break
-            
-            if ddr5_ads:
-                # get_last_ads gibt bereits chronologisch sortiert zurück (alt zu neu)
-                # Keine weitere Sortierung nötig - ältere zuerst, neueste zuletzt
-                sent_count = await self.notifier.send_telegram(ddr5_ads)
-                if sent_count > 0:
-                    logger.info(f"✅ Letzte {len(ddr5_ads)} DDR5 RAM Anzeigen beim Start gesendet (chronologisch: alt zu neu, neueste zuletzt)")
-                else:
-                    logger.warning("Anzeigen konnten nicht gesendet werden")
-            else:
-                logger.info("Keine DDR5 RAM Anzeigen in der Datenbank zum Senden beim Start")
-        except Exception as e:
-            logger.error(f"Fehler beim Senden der letzten Anzeigen beim Start: {e}", exc_info=True)
-            # Fehler nicht kritisch - Bot läuft weiter
-        
-        while self.running:
-            try:
-                await self._run_once()
-            except Exception as e:
-                logger.error(f"Unerwarteter Fehler: {e}", exc_info=True)
-            
-            if not self.running:
-                break
-            
-            # Warte auf nächstes Intervall
-            logger.info(f"Warte {self.interval} Sekunden bis zum nächsten Durchlauf...")
-            for _ in range(self.interval):
-                if not self.running:
-                    break
-                await asyncio.sleep(1)
-        
-        # Stoppe Telegram-Handler
-        if self.telegram_handler_task:
-            self.telegram_handler_task.cancel()
-        
-        logger.info("Kleinanzeigen-Bot beendet")
+                    active_searches = self.database.get_active_searches()
+
+                    if not active_searches:
+                        logger.info("Keine aktiven Suchen. Warte 60 Sekunden...")
+                        await asyncio.sleep(60)
+                        continue
+
+                    for search in active_searches:
+                        if not self.running:
+                            break
+
+                        if self._should_run_search(search):
+                            logger.info(
+                                "Führe Suche aus: %s (ID: %s)",
+                                search["keyword"],
+                                search["search_id"],
+                            )
+                            await self._execute_search(search)
+
+                    await asyncio.sleep(30)
+
+                except Exception as e:  # pragma: no cover
+                    logger.error(f"Fehler in Main Loop: {e}", exc_info=True)
+                    await asyncio.sleep(60)
+
+            await self.telegram_app.stop()
+            await self.telegram_app.shutdown()
+
+        logger.info("Bot beendet")
 
 
-async def main():
+async def main() -> None:
     """Hauptfunktion."""
     parser = argparse.ArgumentParser(description="eBay Kleinanzeigen Scraper-Bot")
     parser.add_argument(
         "--config",
         default="config.json",
-        help="Pfad zur Konfigurationsdatei (Standard: config.json)"
+        help="Pfad zur Konfigurationsdatei (Standard: config.json)",
     )
     parser.add_argument(
-        "--test",
+        "--migrate",
         action="store_true",
-        help="Test-Modus: Nur einmal scrapen, keine Endlosschleife"
+        help="Führt Datenbank-Migration aus vor dem Start",
     )
-    parser.add_argument(
-        "--clear-db",
-        action="store_true",
-        help="Löscht alle Einträge aus der Datenbank"
-    )
-    parser.add_argument(
-        "--stats",
-        action="store_true",
-        help="Zeigt Statistiken über die Datenbank"
-    )
-    parser.add_argument(
-        "--test-telegram",
-        action="store_true",
-        help="Sendet eine Test-Nachricht an Telegram"
-    )
-    parser.add_argument(
-        "--send-last",
-        type=int,
-        default=2,
-        metavar="N",
-        help="Sendet die letzten N gefundenen Anzeigen per Telegram (Standard: 2)"
-    )
-    
+
     args = parser.parse_args()
-    
+
     try:
+        if args.migrate:
+            from migrate_db import DatabaseMigration
+
+            migration = DatabaseMigration()
+            migration.migrate()
+            print("✅ Migration abgeschlossen")
+            return
+
         bot = KleinanzeigenBot(args.config)
-        
-        if args.clear_db:
-            deleted = bot.database.clear_all()
-            print(f"Gelöscht: {deleted} Einträge")
-            return
-        
-        if args.stats:
-            stats = bot.database.get_stats(days=1)
-            print(f"Statistiken:")
-            print(f"  Gesamt: {stats['total']} Anzeigen")
-            print(f"  Letzte 24h: {stats['last_1_days']} Anzeigen")
-            return
-        
-        if args.test_telegram:
-            success = await bot.notifier.send_test_message()
-            if success:
-                print("✅ Test-Nachricht erfolgreich gesendet")
-            else:
-                print("❌ Fehler beim Senden der Test-Nachricht")
-            return
-        
-        await bot.run(test_mode=args.test)
-        
+        await bot.run()
+
     except KeyboardInterrupt:
-        print("\nBot wird beendet...")
+        print("\n Bot wird beendet...")
     except Exception as e:
         logging.error(f"Kritischer Fehler: {e}", exc_info=True)
         sys.exit(1)
@@ -627,5 +424,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
 

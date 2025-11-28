@@ -60,44 +60,67 @@ class Notifier:
         return self.bot
     
     def _format_price(self, price: Optional[float]) -> str:
-        """
-        Formatiert einen Preis für die Anzeige.
-        
-        Args:
-            price: Preis als Float
-            
-        Returns:
-            Formatierter Preis-String
-        """
+        """Formatiert einen Preis als String."""
         if price is None:
             return "Preis auf Anfrage"
         return f"{price:.2f} €".replace(".", ",")
-    
-    def _format_ad_message(self, ad: Dict) -> str:
+
+    def format_message(self, ad: dict) -> str:
         """
-        Formatiert eine Anzeige als Telegram-Nachricht.
-        
+        Formatiert Anzeige als Telegram-Nachricht (ERWEITERT).
+
         Args:
-            ad: Dictionary mit Anzeigendaten
-            
+            ad: Anzeigen-Dictionary
+
         Returns:
-            Formatierte Nachricht als String
+            Formatierte Nachricht
         """
-        title = ad.get("title", "Kein Titel")
-        price = self._format_price(ad.get("price"))
-        location = ad.get("location", "Unbekannt")
+        title = ad.get("title", "Keine Beschreibung")
+        price = ad.get("price")
+        price_str = f"{price}€" if price is not None else "VB"
+
+        msg = f"🆕 *{title}*\n\n"
+        msg += f"💶 *Preis:* {price_str}\n"
+
+        location = ad.get("location", "")
+        if location:
+            msg += f"📍 *Ort:* {location}\n"
+
+        shipping = ad.get("shipping_type", "")
+        if shipping:
+            msg += f"🚚 *Versand:* {shipping}\n"
+
+        posted = ad.get("posted_time", "")
+        if posted:
+            msg += f"🕐 *Eingestellt:* {posted}\n"
+
+        ocr_nr = ad.get("ocr_article_nr")
+        if ocr_nr:
+            msg += f"\n🏷️ *Erkannte Artikel-Nr:* `{ocr_nr}`\n"
+
+        geizhals_data = ad.get("geizhals_data")
+        if geizhals_data:
+            msg += f"\n💎 *Geizhals Vergleich:*\n"
+            msg += f"   • Modell: {geizhals_data.get('model', 'N/A')}\n"
+
+            gh_price = geizhals_data.get("price")
+            if gh_price and price:
+                savings = gh_price - price
+                savings_pct = (savings / gh_price) * 100
+                msg += f"   • Preis: {gh_price}€\n"
+                msg += f"   • 💰 Ersparnis: {savings:.2f}€ ({savings_pct:.1f}%)\n"
+            elif gh_price:
+                msg += f"   • Preis: {gh_price}€\n"
+
+            gh_link = geizhals_data.get("link")
+            if gh_link:
+                msg += f"   • [Geizhals Link]({gh_link})\n"
+
         link = ad.get("link", "")
-        posted_time = ad.get("posted_time", "")
-        
-        message = f"🔔 *Neue Anzeige gefunden!*\n\n"
-        message += f"*{title}*\n\n"
-        message += f"💰 Preis: {price}\n"
-        message += f"📍 Ort: {location}\n"
-        if posted_time:
-            message += f"🕐 {posted_time}\n"
-        message += f"\n🔗 [Zur Anzeige]({link})"
-        
-        return message
+        if link:
+            msg += f"\n🔗 [Zur Anzeige]({link})\n"
+
+        return msg
     
     async def send_telegram(self, ads: List[Dict]) -> int:
         """
@@ -155,7 +178,7 @@ class Notifier:
         
         while retry_count <= max_retries and not success:
             try:
-                message = self._format_ad_message(ad)
+                message = self.format_message(ad)
                 
                 await bot.send_message(
                     chat_id=chat_id,

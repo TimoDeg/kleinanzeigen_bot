@@ -212,10 +212,42 @@ class KleinanzeigenScraper:
                 price_text = price_elem.get_text(strip=True)
                 # Falls es ein Container ist, suche nach dem Preis-Element darin
                 if price_elem.name == "div":
-                    inner_price = price_elem.find("p", class_="aditem-main--middle--price-shipping--price")
+                    inner_price = price_elem.find(
+                        "p",
+                        class_="aditem-main--middle--price-shipping--price",
+                    )
                     if inner_price:
                         price_text = inner_price.get_text(strip=True)
                 price = self._parse_price(price_text)
+
+            # Versand / Abholung Informationen (shipping_type)
+            shipping_type = ""
+            try:
+                shipping_container = (
+                    ad_element.find(
+                        "div",
+                        class_="aditem-main--middle--price-shipping",
+                    )
+                    or ad_element.find(
+                        "span",
+                        class_="aditem-main--middle--price-shipping",
+                    )
+                    or price_elem
+                )
+                if shipping_container:
+                    shipping_text = shipping_container.get_text(
+                        strip=True
+                    )
+                    # Sehr einfache Heuristik – reicht für Filterung
+                    parts = []
+                    if "Versand" in shipping_text:
+                        parts.append("Versand")
+                    if "Abholung" in shipping_text:
+                        parts.append("Abholung")
+                    shipping_type = " / ".join(parts) or shipping_text
+            except Exception:
+                # Versand-Info ist nice-to-have, Fehler hier sind nicht kritisch
+                shipping_type = ""
             
             # Ort - verschiedene Selektoren
             location = ""
@@ -236,6 +268,28 @@ class KleinanzeigenScraper:
             )
             if time_elem:
                 posted_time = time_elem.get_text(strip=True)
+
+            # Bild-URLs (für optionales OCR) – wir nehmen max. 3 sinnvolle Bilder
+            images: List[str] = []
+            try:
+                img_tags = ad_element.find_all("img")
+                for img in img_tags:
+                    src = img.get("data-src") or img.get("src") or ""
+                    if not src:
+                        continue
+                    # Icons / Platzhalter überspringen
+                    if "placeholder" in src or "icon" in src:
+                        continue
+                    # Absolute URL bauen falls nötig
+                    if src.startswith("//"):
+                        src = "https:" + src
+                    elif src.startswith("/"):
+                        src = urljoin(BASE_URL, src)
+                    images.append(src)
+                    if len(images) >= 3:
+                        break
+            except Exception:
+                images = []
             
             # Prüfe ob es ein Gesuch ist (Suchanzeige)
             is_gesuch = False
@@ -256,7 +310,9 @@ class KleinanzeigenScraper:
                 "location": location,
                 "link": link,
                 "posted_time": posted_time,
-                "is_gesuch": is_gesuch
+                "shipping_type": shipping_type,
+                "images": images,
+                "is_gesuch": is_gesuch,
             }
         except Exception as e:
             logger.debug(f"Fehler beim Parsen einer Anzeige: {e}")
