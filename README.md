@@ -80,8 +80,7 @@ curl https://api.telegram.org/botDEIN_BOT_TOKEN/getUpdates
 nano config.json
 ```
 
-**Ändere nur diese beiden Werte:**
-
+**Für eine Chat-ID:**
 ```json
 {
   "telegram": {
@@ -91,9 +90,22 @@ nano config.json
 }
 ```
 
+**Für mehrere Chat-IDs (empfohlen):**
+```json
+{
+  "telegram": {
+    "token": "DEIN_BOT_TOKEN_HIER",
+    "chat_ids": ["DEINE_CHAT_ID_1", "DEINE_CHAT_ID_2", "DEINE_CHAT_ID_3"]
+  }
+}
+```
+
 **Speichern:** `Strg+O`, dann `Enter`, dann `Strg+X`
 
-**Hinweis:** Der Bot Token ist bereits in der `config.json` eingetragen. Du musst nur deine Chat-ID eintragen!
+**Hinweis:** 
+- Der Bot Token ist bereits in der `config.json` eingetragen
+- Du kannst entweder `chat_id` (eine ID) oder `chat_ids` (Liste) verwenden
+- Mit `chat_ids` sendet der Bot Nachrichten an alle konfigurierten Chat-IDs
 
 ### Schritt 7: Testen
 

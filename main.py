@@ -50,10 +50,20 @@ class KleinanzeigenBot:
             retry_delay=scraper_config["retry_delay"]
         )
         
+        # Unterstütze sowohl chat_id (String) als auch chat_ids (Liste) für Rückwärtskompatibilität
+        chat_ids = telegram_config.get("chat_ids")
+        if not chat_ids:
+            # Fallback auf chat_id für Rückwärtskompatibilität
+            chat_id = telegram_config.get("chat_id")
+            chat_ids = [chat_id] if chat_id else []
+        
         self.notifier = Notifier(
             token=telegram_config["token"],
-            chat_id=telegram_config["chat_id"]
+            chat_ids=chat_ids
         )
+        
+        # Speichere Chat-IDs für Befehl-Handler
+        self.chat_ids = [str(cid) for cid in chat_ids]
         
         self.database = Database(db_config["path"])
         
@@ -120,9 +130,16 @@ class KleinanzeigenBot:
         telegram_config = self.config.get("telegram", {})
         if not telegram_config.get("token"):
             logger.warning("⚠️  Telegram Token ist nicht gesetzt! Benachrichtigungen werden nicht funktionieren.")
-        if not telegram_config.get("chat_id"):
-            logger.warning("⚠️  Telegram Chat-ID ist nicht gesetzt! Benachrichtigungen werden nicht gesendet.")
-            logger.warning("   Verwende 'python3 main.py --test-telegram' nach dem Setzen der Chat-ID.")
+        
+        chat_ids = telegram_config.get("chat_ids", [])
+        chat_id = telegram_config.get("chat_id")
+        if not chat_ids and not chat_id:
+            logger.warning("⚠️  Telegram Chat-ID(s) sind nicht gesetzt! Benachrichtigungen werden nicht gesendet.")
+            logger.warning("   Verwende 'python3 main.py --test-telegram' nach dem Setzen der Chat-ID(s).")
+        elif chat_ids:
+            logger.info(f"✅ Telegram konfiguriert für {len(chat_ids)} Chat-ID(s)")
+        elif chat_id:
+            logger.info("✅ Telegram konfiguriert für 1 Chat-ID (verwende 'chat_ids' für mehrere)")
         
         # Prüfe Suchparameter
         search_config = self.config.get("search", {})
@@ -263,24 +280,33 @@ class KleinanzeigenBot:
         return message
     
     async def _send_welcome_message(self) -> None:
-        """Sendet eine Willkommensnachricht mit verfügbaren Befehlen."""
+        """Sendet eine Willkommensnachricht mit verfügbaren Befehlen an alle Chat-IDs."""
         try:
             bot = await self.notifier._get_bot()
-            chat_id = self.config["telegram"]["chat_id"]
+            logger = logging.getLogger(__name__)
             
             welcome_msg = "🤖 *Kleinanzeigen-Bot gestartet!*\n\n"
             welcome_msg += "📋 *Verfügbare Befehle:*\n"
-            welcome_msg += "   • `/test` - Zeigt die letzten 2 Anzeigen\n"
+            welcome_msg += "   • `/test` - Zeigt die letzten 5 DDR5 RAM Anzeigen\n"
             welcome_msg += "   • `/status` - Zeigt Bot-Status und Statistiken\n\n"
             welcome_msg += "Der Bot sucht automatisch alle 5 Minuten nach neuen Anzeigen."
             
-            await bot.send_message(
-                chat_id=chat_id,
-                text=welcome_msg,
-                parse_mode="Markdown"
-            )
-            logger = logging.getLogger(__name__)
-            logger.info("Willkommensnachricht gesendet")
+            success_count = 0
+            for chat_id in self.chat_ids:
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=welcome_msg,
+                        parse_mode="Markdown"
+                    )
+                    success_count += 1
+                except Exception as e:
+                    logger.warning(f"Fehler beim Senden der Willkommensnachricht an Chat-ID {chat_id}: {e}")
+            
+            if success_count > 0:
+                logger.info(f"Willkommensnachricht gesendet an {success_count}/{len(self.chat_ids)} Chat-ID(s)")
+            else:
+                logger.error("Willkommensnachricht konnte an keine Chat-ID gesendet werden")
         except Exception as e:
             logger = logging.getLogger(__name__)
             logger.error(f"Fehler beim Senden der Willkommensnachricht: {e}")
@@ -310,11 +336,31 @@ class KleinanzeigenBot:
             new_ads = self._get_new_ads(filtered_ads)
             logger.info(f"Neue Anzeigen: {len(new_ads)}")
             
-            # Sende Benachrichtigungen (sortiert: ältere zuerst)
+            # Sende Benachrichtigungen (sortiert: ältere zuerst, neueste zuletzt)
             if new_ads:
-                # Anzeigen kommen bereits nach "neueste" sortiert (neueste zuerst)
-                # Umkehren, damit ältere zuerst gesendet werden
+                # Sortiere nach posted_time (wann die Anzeige ursprünglich erstellt wurde)
+                # Falls posted_time nicht verfügbar, verwende die Reihenfolge vom Scraper
+                # Scraper gibt Anzeigen nach "neueste" sortiert zurück (neueste zuerst)
+                # Umkehren, damit ältere zuerst gesendet werden (chronologisch: alt zu neu)
+                def sort_key(ad):
+                    # Versuche nach posted_time zu sortieren, falls verfügbar
+                    posted_time = ad.get("posted_time", "")
+                    if posted_time:
+                        # Konvertiere "vor X Stunden/Tagen" zu einem Sortierwert
+                        # Je älter, desto kleiner der Wert
+                        try:
+                            if "vor" in posted_time.lower():
+                                # Vereinfachte Sortierung: je mehr "vor", desto älter
+                                return posted_time
+                        except:
+                            pass
+                    # Fallback: verwende die Reihenfolge (neueste zuerst, also umkehren)
+                    return ""
+                
+                # Sortiere nach posted_time (falls verfügbar), sonst behalte Reihenfolge
+                # Da Scraper neueste zuerst zurückgibt, umkehren für chronologisch
                 new_ads_sorted = list(reversed(new_ads))
+                logger.info(f"Anzeigen sortiert: {len(new_ads_sorted)} (chronologisch: alt zu neu, neueste zuletzt)")
                 await self.notifier.send_telegram(new_ads_sorted)
             else:
                 logger.info("Keine neuen Anzeigen")
@@ -359,8 +405,8 @@ class KleinanzeigenBot:
                                 text = update.message.text.strip().lower()
                                 chat_id = str(update.message.chat.id)
                                 
-                                # Prüfe ob Nachricht von konfigurierter Chat-ID kommt
-                                if chat_id != self.config["telegram"]["chat_id"]:
+                                # Prüfe ob Nachricht von einer konfigurierten Chat-ID kommt
+                                if chat_id not in self.chat_ids:
                                     logger.debug(f"Ignoriere Nachricht von unbekannter Chat-ID: {chat_id}")
                                     continue
                                 
@@ -368,7 +414,7 @@ class KleinanzeigenBot:
                                 if text == "test" or text == "/test":
                                     logger.info("Test-Befehl empfangen")
                                     try:
-                                        # Hole die neuesten Anzeigen (nur DDR5 RAM)
+                                        # Hole die neuesten Anzeigen aus der DB (sortiert: neueste zuerst)
                                         newest_ads = self.database.get_newest_ads(limit=10)
                                         
                                         # Filtere nur DDR5 RAM Anzeigen
@@ -376,13 +422,15 @@ class KleinanzeigenBot:
                                         ddr5_ads = ddr5_ads[:5]  # Maximal 5 Anzeigen
                                         
                                         if ddr5_ads:
-                                            # Sortiere: ältere zuerst (umgekehrte Reihenfolge)
+                                            # Sortiere chronologisch: ältere zuerst, neueste zuletzt
+                                            # get_newest_ads gibt neueste zuerst zurück (DESC), also umkehren
                                             ddr5_ads_sorted = list(reversed(ddr5_ads))
+                                            logger.info(f"Test-Befehl: {len(ddr5_ads_sorted)} Anzeigen sortiert (chronologisch: alt zu neu)")
                                             sent_count = await self.notifier.send_telegram(ddr5_ads_sorted)
                                             if sent_count > 0:
                                                 await bot.send_message(
                                                     chat_id=chat_id,
-                                                    text=f"✅ {len(ddr5_ads_sorted)} neueste DDR5 RAM Anzeigen gesendet"
+                                                    text=f"✅ {len(ddr5_ads_sorted)} DDR5 RAM Anzeigen gesendet (chronologisch: alt zu neu)"
                                                 )
                                             else:
                                                 await bot.send_message(
@@ -453,13 +501,14 @@ class KleinanzeigenBot:
         await asyncio.sleep(2)  # Kurz warten, damit Handler bereit ist
         await self._send_welcome_message()
         
-        # Sende die letzten 3 Anzeigen beim Start (nur DDR5 RAM)
-        logger.info("Sende die letzten 3 DDR5 RAM Anzeigen beim Start...")
+        # Sende die letzten 3 Anzeigen beim Start (nur DDR5 RAM, chronologisch: alt zu neu)
+        logger.info("Sende die letzten 3 DDR5 RAM Anzeigen beim Start (chronologisch: alt zu neu)...")
         try:
             # Hole mehr Anzeigen, um sicherzustellen, dass wir genug DDR5 RAM Anzeigen finden
+            # get_last_ads sortiert bereits chronologisch (alt zu neu) mit ORDER BY fetched_at ASC
             last_ads = self.database.get_last_ads(limit=20)
             
-            # Filtere nur DDR5 RAM Anzeigen (chronologisch beibehalten)
+            # Filtere nur DDR5 RAM Anzeigen (chronologische Reihenfolge beibehalten)
             ddr5_ads = []
             for ad in last_ads:
                 title_lower = ad.get("title", "").lower()
@@ -470,10 +519,11 @@ class KleinanzeigenBot:
                         break
             
             if ddr5_ads:
-                # Sortiert bereits chronologisch (alt zu neu) durch fetched_at ASC
+                # get_last_ads gibt bereits chronologisch sortiert zurück (alt zu neu)
+                # Keine weitere Sortierung nötig - ältere zuerst, neueste zuletzt
                 sent_count = await self.notifier.send_telegram(ddr5_ads)
                 if sent_count > 0:
-                    logger.info(f"Letzte {len(ddr5_ads)} DDR5 RAM Anzeigen beim Start gesendet (chronologisch: alt zu neu)")
+                    logger.info(f"✅ Letzte {len(ddr5_ads)} DDR5 RAM Anzeigen beim Start gesendet (chronologisch: alt zu neu, neueste zuletzt)")
                 else:
                     logger.warning("Anzeigen konnten nicht gesendet werden")
             else:

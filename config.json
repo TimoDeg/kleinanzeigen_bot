@@ -9,7 +9,7 @@
   },
   "telegram": {
     "token": "8285898160:AAEt992_pmQ0QwVE__gLRUOoBkhgc_zNs-U",
-    "chat_id": "8458097600"
+    "chat_ids": ["8458097600", "7674687109"]
   },
   "scraper": {
     "interval_seconds": 300,
