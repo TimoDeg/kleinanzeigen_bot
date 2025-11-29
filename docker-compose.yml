@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: ddr5_ram_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    shm_size: 2gb
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    environment:
+      - PYTHONUNBUFFERED=1
+

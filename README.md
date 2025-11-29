@@ -1,405 +1,230 @@
-# eBay Kleinanzeigen Scraper-Bot - Einfache Ubuntu Installation
+# DDR5 RAM Bot für eBay Kleinanzeigen
 
-Ein produktionsreifer Python-Bot zum automatischen Scraping von eBay Kleinanzeigen mit Telegram-Benachrichtigungen bei neuen DDR5 RAM Anzeigen.
+Ein produktionsreifer Python Bot, der eBay Kleinanzeigen nach DDR5 RAM durchsucht, strukturierte Daten extrahiert und per Telegram ausgibt. Docker-basiert, modular und robust.
 
-## 📋 Voraussetzungen
+## Features
 
-- Ubuntu 20.04 oder höher
-- Python 3.9 oder höher
-- Internetverbindung
-- Telegram Account
+- 🔍 Automatische Suche nach DDR5 RAM auf eBay Kleinanzeigen
+- 🤖 Selenium + undetected-chromedriver für Anti-Bot-Umgehung
+- 📊 Strukturierte Datenextraktion (Modellnummern, Specs, Metadaten)
+- 📱 Telegram-Benachrichtigungen für neue Anzeigen
+- 🐳 Docker-basiert für einfaches Deployment
+- 💾 SQLite-Datenbank für Duplikat-Tracking
+- ⚡ Priority-Scoring für relevante Anzeigen
 
----
+## Tech Stack
 
-## 🚀 Installation (5 Minuten)
+- Python 3.11+
+- Selenium + undetected-chromedriver
+- Docker + Docker Compose
+- SQLite
+- python-telegram-bot
+- Pydantic für Datenvalidierung
 
-### Schritt 1: System vorbereiten
+## Projektstruktur
+
+```
+kleinanzeigen_ddr5_bot/
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+├── .env.example
+├── README.md
+├── src/
+│   ├── __init__.py
+│   ├── main.py              # Entry point + orchestration
+│   ├── config.py            # Config management (env vars)
+│   ├── scraper.py           # Selenium-based scraper
+│   ├── parser.py            # RAM data extraction logic
+│   ├── database.py          # SQLite operations
+│   ├── telegram_bot.py      # Telegram integration
+│   ├── models.py            # Pydantic data models
+│   └── utils.py             # Helper functions
+└── data/
+    └── ads.db               # SQLite database (auto-created)
+```
+
+## Installation & Setup
+
+### 1. Repository klonen/erstellen
 
 ```bash
-sudo apt update
-sudo apt install python3 python3-pip python3-venv git -y
+cd kleinanzeigen_ddr5_bot
 ```
 
-### Schritt 2: Projekt herunterladen
+### 2. Umgebungsvariablen konfigurieren
 
 ```bash
-cd ~
-git clone https://github.com/TimoDeg/kleinanzeigen_bot.git
-cd kleinanzeigen_bot
+cp .env.example .env
 ```
 
-**Falls Git nicht installiert ist oder du die Dateien manuell kopieren willst:**
-- Lade das Projekt als ZIP von GitHub herunter
-- Entpacke es in `~/kleinanzeigen_bot`
-
-### Schritt 3: Virtual Environment erstellen
+Editiere `.env` und setze:
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+# Telegram
+TELEGRAM_BOT_TOKEN=dein_bot_token_hier
+TELEGRAM_CHAT_IDS=123456789,987654321
+
+# Scraping (optional)
+SCAN_INTERVAL_SECONDS=60
+MAX_PAGES_PER_SCAN=5
+REQUEST_DELAY_MIN=2
+REQUEST_DELAY_MAX=4
+
+# Selenium (optional)
+HEADLESS=true
+IMPLICIT_WAIT=10
+PAGE_LOAD_TIMEOUT=30
+
+# Database (optional)
+DB_PATH=./data/ads.db
+
+# Filters (optional)
+MIN_PRICE=50
+MAX_PRICE=500
+EXCLUDE_DEFEKT=true
 ```
 
-**Wichtig:** Du musst das Virtual Environment jedes Mal aktivieren:
-```bash
-source venv/bin/activate
-```
-
-### Schritt 4: Dependencies installieren
-
-```bash
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### Schritt 5: Chat-ID herausfinden (30 Sekunden)
-
-**Einfachste Methode:**
-
-1. Öffne Telegram
-2. Suche nach **@userinfobot**
-3. Starte den Bot und sende `/start`
-4. Der Bot zeigt dir deine Chat-ID an (z.B. `123456789`)
-5. **Kopiere diese Nummer**
-
-**Alternative Methode (falls @userinfobot nicht funktioniert):**
-
-1. Sende eine Nachricht an deinen Bot
-2. Führe diesen Befehl aus (ersetze `DEIN_BOT_TOKEN` mit deinem Token):
+### 3. Docker Build & Start
 
 ```bash
-curl https://api.telegram.org/botDEIN_BOT_TOKEN/getUpdates
-```
+# Build
+docker-compose build
 
-3. Suche nach `"chat":{"id":123456789}` - das ist deine Chat-ID
-
-### Schritt 6: Konfiguration anpassen
-
-Öffne `config.json`:
-
-```bash
-nano config.json
-```
-
-**Für eine Chat-ID:**
-```json
-{
-  "telegram": {
-    "token": "DEIN_BOT_TOKEN_HIER",
-    "chat_id": "DEINE_CHAT_ID_HIER"
-  }
-}
-```
-
-**Für mehrere Chat-IDs (empfohlen):**
-```json
-{
-  "telegram": {
-    "token": "DEIN_BOT_TOKEN_HIER",
-    "chat_ids": ["DEINE_CHAT_ID_1", "DEINE_CHAT_ID_2", "DEINE_CHAT_ID_3"]
-  }
-}
-```
-
-**Speichern:** `Strg+O`, dann `Enter`, dann `Strg+X`
-
-**Hinweis:** 
-- Der Bot Token ist bereits in der `config.json` eingetragen
-- Du kannst entweder `chat_id` (eine ID) oder `chat_ids` (Liste) verwenden
-- Mit `chat_ids` sendet der Bot Nachrichten an alle konfigurierten Chat-IDs
-
-### Schritt 7: Testen
-
-**Telegram-Verbindung testen:**
-```bash
-source venv/bin/activate
-python3 main.py --test-telegram
-```
-
-Du solltest eine Test-Nachricht in Telegram erhalten.
-
-**Einmaliges Scraping testen:**
-```bash
-source venv/bin/activate
-python3 main.py --test
-```
-
----
-
-## 🎯 Bot starten
-
-### Option 1: Manuell (für Tests)
-
-```bash
-cd ~/kleinanzeigen_bot
-source venv/bin/activate
-python3 main.py
-```
-
-**Stoppen:** `Strg+C`
-
-### Option 2: Im Hintergrund mit Screen (Empfohlen)
-
-```bash
-# Screen installieren (falls nicht vorhanden)
-sudo apt install screen -y
-
-# Screen-Session starten
-cd ~/kleinanzeigen_bot
-screen -S kleinanzeigen-bot
-
-# Bot starten
-source venv/bin/activate
-python3 main.py
-
-# Screen verlassen (Bot läuft weiter): Strg+A, dann D
-```
-
-**Screen wieder anheften:**
-```bash
-screen -r kleinanzeigen-bot
-```
-
-**Screen beenden:**
-```bash
-screen -r kleinanzeigen-bot
-# Dann Strg+C zum Stoppen
-```
-
-### Option 3: Als Systemd Service (Auto-Start beim Boot)
-
-**1. Service-Datei anpassen:**
-
-```bash
-nano kleinanzeigen-bot.service
-```
-
-**Ändere folgende Zeilen** (ersetze `dein_benutzername` mit deinem Ubuntu-Benutzernamen - finde ihn mit `whoami`):
-
-```ini
-[Service]
-User=dein_benutzername
-WorkingDirectory=/home/dein_benutzername/kleinanzeigen_bot
-ExecStart=/home/dein_benutzername/kleinanzeigen_bot/venv/bin/python3 /home/dein_benutzername/kleinanzeigen_bot/main.py
-```
-
-**Speichern:** `Strg+O`, dann `Enter`, dann `Strg+X`
-
-**2. Service installieren:**
-
-```bash
-sudo cp kleinanzeigen-bot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable kleinanzeigen-bot.service
-sudo systemctl start kleinanzeigen-bot.service
-```
-
-**3. Service verwalten:**
-
-```bash
-# Status prüfen
-sudo systemctl status kleinanzeigen-bot.service
+# Start (im Hintergrund)
+docker-compose up -d
 
 # Logs anzeigen
-sudo journalctl -u kleinanzeigen-bot.service -f
-
-# Service stoppen
-sudo systemctl stop kleinanzeigen-bot.service
-
-# Service starten
-sudo systemctl start kleinanzeigen-bot.service
-
-# Service neu starten
-sudo systemctl restart kleinanzeigen-bot.service
+docker-compose logs -f bot
 ```
 
----
+## Telegram Commands
 
-## 📱 Telegram-Befehle
+- `/start` - Bot starten + Info
+- `/status` - Aktuelle Statistiken (gesamt, heute, letzter Scan)
+- `/test` - Sende letzte 5 erkannte Anzeigen
+- `/stats` - Detaillierte DB Stats (RAM Hersteller Verteilung)
 
-Sende diese Nachrichten an deinen Bot:
+## Nachrichtenformat
 
-- **`test`** oder **`/test`** → Sendet die 5 neuesten DDR5 RAM Anzeigen
-- **`status`** oder **`/status`** → Zeigt Bot-Status, Statistiken und Details
-
----
-
-## ⚙️ Konfiguration
-
-### Wichtige Einstellungen in `config.json`
-
-```json
-{
-  "search": {
-    "keyword": "DDR5 RAM",           // Suchbegriff
-    "category": "c225",              // Kategorie (c225 = PC-Zubehör)
-    "price_min": 70,                 // Mindestpreis in Euro
-    "price_max": 251,                // Höchstpreis in Euro
-    "exclude_keywords": [...]        // Auszuschließende Keywords
-  },
-  "scraper": {
-    "interval_seconds": 300,         // Wartezeit zwischen Durchläufen (5 Min)
-    "request_timeout": 30,           // Timeout für HTTP-Requests
-    "request_delay_min": 1,          // Minimale Verzögerung zwischen Requests
-    "request_delay_max": 2           // Maximale Verzögerung zwischen Requests
-  }
-}
+```
+🔷 DDR5 RAM Alert [Priority Score: X/16]
+📦 Modell: {model_number oder "Unbekannt"}
+🏭 Hersteller: {manufacturer}
+💾 Kapazität: {capacity}
+⚡ Takt: {speed}
+⏱️ Latenz: {latency}
+🎨 Farbe: {color}
+💰 Preis: {price}€
+📍 Ort: {location}
+✅ OVP: {Ja/Nein}
+📄 Rechnung: {Ja/Nein}
+📮 Versand: {Möglich/Nur Abholung}
+🕐 Online seit: {posted_date}
+🔗 {url}
 ```
 
----
+## Priority Score
 
-## 🔧 CLI-Befehle
+Der Bot berechnet einen Priority Score für jede Anzeige:
+
+- +5 Punkte: Modellnummer erkannt
+- +3 Punkte: OVP vorhanden
+- +3 Punkte: Rechnung vorhanden
+- +2 Punkte: Versand möglich
+- +2 Punkte: Alle Specs vollständig
+- +1 Punkt: Farbe angegeben
+- -2 Punkte: "defekt" oder "kaputt" im Text
+
+## Datenbank-Schema
+
+Die SQLite-Datenbank speichert:
+
+- Anzeigen-ID, Titel, Preis, Ort, URL
+- RAM-Spezifikationen (Modellnummer, Hersteller, Kapazität, Takt, Latenz, Farbe)
+- Metadaten (OVP, Rechnung, Versand)
+- Priority Score
+- Timestamps (first_seen, last_checked)
+
+## Monitoring
 
 ```bash
-# Test-Modus (einmaliges Scraping)
-python3 main.py --test
+# Logs in Echtzeit
+docker-compose logs -f bot
 
-# Telegram-Test
-python3 main.py --test-telegram
+# Container-Status
+docker-compose ps
 
-# Datenbank-Statistiken
-python3 main.py --stats
+# Container neu starten
+docker-compose restart bot
 
-# Datenbank leeren
-python3 main.py --clear-db
+# Container stoppen
+docker-compose down
 ```
 
----
+## Anti-Ban Maßnahmen
 
-## 🐛 Fehlerbehebung
+- User-Agent Rotation (10+ reale Browser UAs)
+- Request Delays (2-4 Sekunden zufällig)
+- Session Management (neue Session alle 50 Requests)
+- Undetected Chrome (verhindert WebDriver detection)
+- Proxy Support (optional via `HTTP_PROXY` env var)
 
-### Problem: "ModuleNotFoundError"
+## Troubleshooting
 
-**Lösung:**
+### Bot startet nicht
+
+- Prüfe `.env` Datei (Token, Chat IDs)
+- Prüfe Docker-Logs: `docker-compose logs bot`
+- Prüfe ob Ports frei sind
+
+### Keine Anzeigen gefunden
+
+- Prüfe ob eBay Kleinanzeigen erreichbar ist
+- Prüfe Selenium-Logs für Fehler
+- Erhöhe `PAGE_LOAD_TIMEOUT` in `.env`
+
+### Telegram-Nachrichten kommen nicht an
+
+- Prüfe Bot Token
+- Prüfe Chat IDs (müssen als String mit Komma getrennt sein)
+- Teste mit `/start` Command
+
+## Entwicklung
+
+### Lokale Entwicklung (ohne Docker)
+
 ```bash
-cd ~/kleinanzeigen_bot
-source venv/bin/activate
+# Virtual Environment
+python3 -m venv venv
+source venv/bin/activate  # Linux/Mac
+# oder
+venv\Scripts\activate  # Windows
+
+# Dependencies installieren
 pip install -r requirements.txt
+
+# Bot starten
+python -m src.main
 ```
 
-### Problem: "Keine chat_id konfiguriert"
+**Hinweis:** Für lokale Entwicklung benötigst du Chrome/Chromium und ChromeDriver.
 
-**Lösung:**
-1. Öffne `config.json`
-2. Füge deine Chat-ID ein (siehe Schritt 5)
-3. Speichere die Datei
+## Erfolgskriterien
 
-### Problem: "Telegram-Fehler: Unauthorized"
+- ✅ Bot läuft stabil 24/7 ohne Crash
+- ✅ Erkennt >80% der Modellnummern bei aktuellen Anzeigen
+- ✅ <5% False Positives (keine DDR4, keine Gesuche)
+- ✅ Telegram Nachrichten innerhalb 1 Minute nach Veröffentlichung
+- ✅ Docker Container Start <30 Sekunden
+- ✅ Memory Usage <500MB steady state
+- ✅ 1 Minute Pause zwischen jedem Refresh
 
-**Lösung:**
-1. Prüfe, ob der Bot Token korrekt ist
-2. Stelle sicher, dass du eine Nachricht an den Bot gesendet hast
-3. Teste mit: `python3 main.py --test-telegram`
+## Lizenz
 
-### Problem: "Keine Anzeigen gefunden"
+Siehe LICENSE Datei.
 
-**Mögliche Ursachen:**
-- HTML-Struktur von eBay Kleinanzeigen hat sich geändert
-- Keine Anzeigen entsprechen den Suchkriterien
-- Rate-Limiting oder IP-Block
+## Support
 
-**Lösung:**
-```bash
-# Prüfe Logs
-tail -f bot.log
+Bei Problemen oder Fragen, erstelle ein Issue im Repository.
 
-# Erhöhe Verzögerung in config.json
-# "request_delay_min": 2
-# "request_delay_max": 3
-```
-
-### Problem: Service startet nicht
-
-**Lösung:**
-```bash
-# Prüfe Logs
-sudo journalctl -u kleinanzeigen-bot.service -n 50
-
-# Prüfe Pfade in der Service-Datei
-cat /etc/systemd/system/kleinanzeigen-bot.service
-
-# Teste manuell
-cd ~/kleinanzeigen_bot
-source venv/bin/activate
-python3 main.py --test
-```
-
-### Problem: Bot sendet keine Nachrichten
-
-**Lösung:**
-1. Teste Telegram: `python3 main.py --test-telegram`
-2. Prüfe Chat-ID in `config.json`
-3. Prüfe Bot Token in `config.json`
-4. Stelle sicher, dass du dem Bot erlaubt hast, dir Nachrichten zu senden
-
----
-
-## 📁 Projektstruktur
-
-```
-kleinanzeigen_bot/
-├── config.json              # Konfigurationsdatei
-├── requirements.txt         # Python-Dependencies
-├── database.py              # SQLite-Datenbank-Management
-├── scraper.py               # eBay Kleinanzeigen Scraper
-├── notifier.py              # Telegram-Benachrichtigungen
-├── main.py                  # Hauptprogramm
-├── kleinanzeigen-bot.service # Systemd Service
-├── README.md                # Diese Datei
-├── venv/                    # Virtual Environment (wird erstellt)
-└── kleinanzeigen.db         # SQLite-Datenbank (wird automatisch erstellt)
-```
-
----
-
-## 🔒 Sicherheit
-
-- **Bot Token:** Niemals öffentlich teilen oder in Git committen
-- **Rate-Limiting:** Respektiere die Website (min. 1-2 Sekunden zwischen Requests)
-- **User-Agent:** Verwendet einen realistischen Browser-User-Agent
-
----
-
-## 📊 Was macht der Bot?
-
-1. **Automatisches Scraping:** Sucht alle 5 Minuten nach neuen DDR5 RAM Anzeigen
-2. **Intelligente Filterung:**
-   - Preisbereich: 70€ - 251€
-   - Nur Angebote (keine Gesuche)
-   - Ausschluss von defekten/kaputten Artikeln
-   - Nur DDR5 RAM Anzeigen
-3. **Duplikat-Vermeidung:** Speichert bereits gesehene Anzeigen in SQLite
-4. **Telegram-Benachrichtigungen:** Sendet dir sofort eine Nachricht bei neuen Anzeigen
-5. **Beim Start:** Sendet die letzten 3 DDR5 RAM Anzeigen (chronologisch: alt zu neu)
-
----
-
-## 🆘 Support
-
-Bei Problemen:
-1. Prüfe die Logs: `tail -f bot.log` oder `sudo journalctl -u kleinanzeigen-bot.service -f`
-2. Teste mit `--test` Flag
-3. Prüfe die Konfiguration in `config.json`
-4. Stelle sicher, dass alle Dependencies installiert sind
-
----
-
-## 📝 Lizenz
-
-Dieses Projekt ist für den persönlichen Gebrauch bestimmt. Beachte die Nutzungsbedingungen von eBay Kleinanzeigen.
-
----
-
-## ✅ Checkliste für die Installation
-
-- [ ] Ubuntu aktualisiert
-- [ ] Python 3 und pip installiert
-- [ ] Projekt heruntergeladen (`git clone` oder ZIP)
-- [ ] Virtual Environment erstellt (`python3 -m venv venv`)
-- [ ] Dependencies installiert (`pip install -r requirements.txt`)
-- [ ] Chat-ID herausgefunden (@userinfobot)
-- [ ] `config.json` angepasst (Chat-ID eingetragen)
-- [ ] Telegram-Test erfolgreich (`--test-telegram`)
-- [ ] Scraping-Test erfolgreich (`--test`)
-- [ ] Bot gestartet (Screen oder Systemd)
-
-**Fertig! Der Bot läuft jetzt und sendet dir automatisch Benachrichtigungen bei neuen DDR5 RAM Anzeigen.** 🎉
