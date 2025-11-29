@@ -1,3 +1,9 @@
+# ============================================
+# ALLES außerhalb dieses Verzeichnisses ignorieren
+# ============================================
+# Ignoriere alles, was außerhalb des Projekt-Verzeichnisses liegt
+# (Diese Patterns verhindern, dass Dateien aus übergeordneten Verzeichnissen getrackt werden)
+
 # Python
 __pycache__/
 *.py[cod]
@@ -17,6 +23,7 @@ ENV/
 # Logs
 *.log
 logs/
+bot.log
 
 # IDE
 .vscode/
@@ -24,12 +31,29 @@ logs/
 *.swp
 *.swo
 *~
+.cursor/
 
 # OS
 .DS_Store
 Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Temporäre Dateien
+*.pid
+*.tmp
+*.temp
+.cache/
+*.bak
+*.swp
+
+# Umgebungsvariablen
+.env
+.env.local
 
 # Konfiguration (falls sensible Daten)
-# config.json  # Auskommentiert, da config.json im Repo sein soll
+# config.json bleibt im Repo (ist auskommentiert)
 
-
+# Backup-Dateien
+*~
+*.orig
